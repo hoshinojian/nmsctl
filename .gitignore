@@ -1,0 +1,4 @@
+__pycache__/
+churn/tests/dryrun/
+churn/tests/dryrun-*.log
+env.local

@@ -42,12 +42,13 @@ printf '%s\n' "${BATCHES[@]}" | awk '{print $1, $3}' > "$EVIDENCE/s3/distributio
 
 # 区域内 env:soak active 台数（剔除 NMS 机；<inv.json> <region>）
 region_active_count() {
-  python3 - "$1" "$2" <<'PYEOF'
+  python3 - "$1" "$2" "$3" <<'PYEOF'
 import json, os, sys
 d = json.load(open(sys.argv[1]))
 items = d if isinstance(d, list) else d.get('items', d.get('droplets', []))
 n = sum(1 for i in items
-        if i.get('region') == sys.argv[2] and i.get('status') == 'active'
+        if i.get('region') == sys.argv[2] and i.get('account') == sys.argv[3]
+        and i.get('status') == 'active'
         and not i.get('name', '').startswith(os.environ['NMS_NAME_PREFIX']))
 print(n)
 PYEOF
@@ -98,9 +99,9 @@ for line in "${BATCHES[@]}"; do
   set -- $line; region=$1; acct=$2; want=$3; size=$4
   done_flag=""
   for try in 1 2 3; do
-    inv="$EVIDENCE/s3/have-$region-try$try.json"
+    inv="$EVIDENCE/s3/have-$region-$acct-try$try.json"
     "$VPSCTL" list -tag env:soak -no-check-ssh -output "$inv" > /dev/null
-    have=$(region_active_count "$inv" "$region")
+    have=$(region_active_count "$inv" "$region" "$acct")
     need=$((want - have))
     if [ "$need" -le 0 ]; then
       if [ "$have" -gt "$want" ]; then
@@ -109,7 +110,7 @@ for line in "${BATCHES[@]}"; do
       log "$region 存量 $have/$want，无需补建"
       done_flag=1; break
     fi
-    out="$EVIDENCE/s3/create-$region-try$try.json"
+    out="$EVIDENCE/s3/create-$region-$acct-try$try.json"
     log "create $region/$acct x$need（存量 $have/$want，$size）第 $try 轮"
     if "$VPSCTL" create -image ubuntu-24-04-x64 -region "$region" -size "$size" \
          -only "$acct" -count "$need" -name-prefix soak -tags env:soak -wait 420s \

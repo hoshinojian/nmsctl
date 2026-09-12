@@ -69,13 +69,17 @@ check_egress
 [ -f "$NMS_IP_FILE" ] || { echo "ABORT: S2 未执行" >&2; exit 1; }
 
 # ---- S3 前置配额预检（T3 必改）：vpsctl 无配额命令，裸 GET /v2/account ----
-log "配额预检：droplet_limit vs 计划（$PLAN_STR）——token 只在内存使用，不落日志"
+# D4（同批）：配额预检同时做账号凭据防呆——无 ssh_password 账号若不传 user-data 即裸机
+#（P81：机器无法 SSH 管理 → 探针负事实 → 拉黑死锁）。D3 落地后本预检退化为「自动分叉
+# 提示」：无密码批次将自动传实例化 user-data（密码同源 NODE_PASS），缺 AUTHORIZED_KEY
+# 则在此 fail-fast，不等到建机才发现。
+log "配额预检：droplet_limit vs 计划（$PLAN_STR）+ 凭据防呆（D4）——token 只在内存使用，不落日志"
 PLAN_STR="$PLAN_STR" python3 - <<'PYEOF'
 import json, os, urllib.request
 plan = dict(kv.split(':') for kv in os.environ['PLAN_STR'].split())
 cfg = json.load(open(os.environ['VPSCTL_ACCOUNTS']))
 accts = cfg['accounts'] if isinstance(cfg, dict) else cfg
-rows, fail = [], False
+rows, fail, passwordless = [], False, []
 for a in accts:
     name = a.get('name')
     if name not in plan:
@@ -86,17 +90,35 @@ for a in accts:
     limit = int(acc['droplet_limit'])
     ok = limit >= int(plan[name])
     fail = fail or not ok
-    rows.append((name, int(plan[name]), limit, 'OK' if ok else '不足'))
-print('配额预检结果（账号: 计划/limit/判定）:')
+    if not a.get('ssh_password'):
+        passwordless.append(name)
+    rows.append((name, int(plan[name]), limit, 'OK' if ok else '不足',
+                 'user-data 分叉' if not a.get('ssh_password') else 'ssh_password 注入'))
+print('配额预检结果（账号: 计划/limit/判定/凭据模式）:')
 for r in rows:
-    print(f'  {r[0]}: {r[1]} / {r[2]} / {r[3]}')
+    print(f'  {r[0]}: {r[1]} / {r[2]} / {r[3]} / {r[4]}')
+with open('evidence/s3/passwordless-accounts.txt', 'w') as f:
+    f.writelines(n + '\n' for n in passwordless)
+if passwordless and not os.environ.get('AUTHORIZED_KEY', '').strip():
+    raise SystemExit('ABORT(D4): 无 ssh_password 账号 %s 但 AUTHORIZED_KEY 未设置——user-data 分叉无法实例化，先补 env.local' % passwordless)
+if passwordless:
+    print(f'D3 分叉：{passwordless} 批次建机将传实例化 user-data（node-user-data-ascii.sh，密码同源 NODE_PASS）')
 if fail:
     raise SystemExit('ABORT: 配额不足——按计划先调分布再建机（分布表见 scale-coldstart-churn-plan §一 T3）')
 PYEOF
 
 # ---- 建机：按缺口补建（每轮补建前重新盘点存量，防部分成功后整批重试超建）----
+NODE_UD="$EVIDENCE/s3/node-user-data.sh"   # D3 分叉实例化件（懒实例化，0600 落运行时目录）
 for line in "${BATCHES[@]}"; do
   set -- $line; region=$1; acct=$2; want=$3; size=$4
+  ud_args=()
+  if grep -qx "$acct" "$EVIDENCE/s3/passwordless-accounts.txt"; then
+    # D3：无 ssh_password 账号批次传实例化 user-data（vpsctl 互斥规则：误对有密码批
+    # 传 user-data 会 fail-fast 报错而非静默；有密码批不传，维持 vpsctl 注入现状）
+    [ -f "$NODE_UD" ] || instantiate_user_data "$SOAK_HOME/rebuild/node-user-data-ascii.sh" "$NODE_UD"
+    ud_args=(-user-data "$NODE_UD")
+    log "分叉确认：$acct 无 ssh_password，本批 create 将传 user-data（D3）"
+  fi
   done_flag=""
   for try in 1 2 3; do
     inv="$EVIDENCE/s3/have-$region-$acct-try$try.json"
@@ -114,6 +136,7 @@ for line in "${BATCHES[@]}"; do
     log "create $region/$acct x$need（存量 $have/$want，$size）第 $try 轮"
     if "$VPSCTL" create -image ubuntu-24-04-x64 -region "$region" -size "$size" \
          -only "$acct" -count "$need" -name-prefix soak -tags env:soak -wait 420s \
+         ${ud_args[@]+"${ud_args[@]}"} \
          -output "$out" > /dev/null; then
       got=$(python3 -c "
 import json; d=json.load(open('$out'))

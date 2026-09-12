@@ -16,7 +16,7 @@ source "$SOAK_ENV/env.local"
 # driver 脚本仓内根（lib/ 的上级）；场景/阶段脚本彼此经 SOAK_HOME 定位
 SOAK_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export SOAK_HOME
-# 运行时目录承担「工作台」角色：各阶段 cd 进去后，
+# 运行时目录承担旧 $HOME/nms-rebuild-20260910 的角色：各阶段 cd 进去后，
 # 嵌入 python 里的相对路径 evidence/... 与 $EVIDENCE 同一目录，语义不变。
 export REBUILD_DIR="$SOAK_ENV"
 export EVIDENCE="$SOAK_ENV/evidence"

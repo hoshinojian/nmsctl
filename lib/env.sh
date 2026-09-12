@@ -9,13 +9,22 @@
 
 : "${SOAK_ENV:?未设置 SOAK_ENV=<运行时目录>（内含 env.local 与 evidence/；用法见 scripts/soak/README.md）}"
 SOAK_ENV="$(cd "$SOAK_ENV" && pwd)"
-[ -f "$SOAK_ENV/env.local" ] || { echo "ABORT: $SOAK_ENV/env.local 不存在——从 scripts/soak/env.local.example 复制并填写" >&2; exit 1; }
-# shellcheck source=/dev/null
-source "$SOAK_ENV/env.local"
 
 # driver 脚本仓内根（lib/ 的上级）；场景/阶段脚本彼此经 SOAK_HOME 定位
 SOAK_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export SOAK_HOME
+# D8 fail-fast 双保险（在 env.local 检查之前）：SOAK_ENV 不得指向仓内——env.local
+#（凭据）与 evidence/ 落仓内即有入库风险（.gitignore 只是兜底；真机密一律只在运行时目录）。
+case "$SOAK_ENV" in
+  "$SOAK_HOME"|"$SOAK_HOME"/*)
+    echo "ABORT(D8): SOAK_ENV=$SOAK_ENV 在仓内（$SOAK_HOME）——env.local/evidence 会污染仓库，换独立运行时目录" >&2
+    exit 1;;
+esac
+
+[ -f "$SOAK_ENV/env.local" ] || { echo "ABORT: $SOAK_ENV/env.local 不存在——从 scripts/soak/env.local.example 复制并填写" >&2; exit 1; }
+# shellcheck source=/dev/null
+source "$SOAK_ENV/env.local"
+
 # 运行时目录承担旧 $HOME/nms-rebuild-20260910 的角色：各阶段 cd 进去后，
 # 嵌入 python 里的相对路径 evidence/... 与 $EVIDENCE 同一目录，语义不变。
 export REBUILD_DIR="$SOAK_ENV"
@@ -90,4 +99,36 @@ log()  { echo "[$(date -u +%FT%TZ)] $*"; }
 gate() { # gate <Sx> PASS|FAIL <说明>
   log "GATE $1: $2 — $3"
   [ "$2" = "PASS" ] || exit 1
+}
+
+# ---- D3 共用实例化链路（自 s2 内联片段抽取；s2/s3 共用）----
+# instantiate_user_data <模板路径> <输出路径>：__NODE_PASS__/__AUTHORIZED_KEY__ 注入。
+# 仓内模板零凭据；实例化件落运行时目录（0600）不入库。密码同源：模板密码与 s4 载荷
+# ssh_password 同用 env NODE_PASS。
+instantiate_user_data() {
+  python3 - "$1" "$2" <<'PYEOF'
+import os, sys
+tpl_path, out_path = sys.argv[1], sys.argv[2]
+tpl = open(tpl_path).read()
+assert '__NODE_PASS__' in tpl, "user-data 模板缺 __NODE_PASS__ 占位"
+assert '__AUTHORIZED_KEY__' in tpl, "user-data 模板缺 __AUTHORIZED_KEY__ 占位"
+pw = os.environ['NODE_PASS']
+assert '__NODE_PASS__' not in pw
+ak = os.environ.get('AUTHORIZED_KEY', '').strip()
+assert ak and '__AUTHORIZED_KEY__' not in ak, 'AUTHORIZED_KEY 未设置（节点 root authorized_keys 注入用）'
+open(out_path, 'w').write(tpl.replace('__NODE_PASS__', pw).replace('__AUTHORIZED_KEY__', ak))
+os.chmod(out_path, 0o600)
+PYEOF
+}
+
+# account_has_password <账号名>：读 VPSCTL_ACCOUNTS 判该账号是否配了 ssh_password
+#（1=有/0=无）。D3 分叉判据：无密码账号批次建机须传实例化 user-data，否则裸机（P81）。
+account_has_password() {
+  VPSCTL_ACCOUNTS="$VPSCTL_ACCOUNTS" ACCT="$1" python3 - <<'PYEOF'
+import json, os
+cfg = json.load(open(os.environ['VPSCTL_ACCOUNTS']))
+accts = cfg['accounts'] if isinstance(cfg, dict) else cfg
+a = next((x for x in accts if x.get('name') == os.environ['ACCT']), None)
+print('1' if a and a.get('ssh_password') else '0')
+PYEOF
 }

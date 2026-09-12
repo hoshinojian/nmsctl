@@ -27,7 +27,7 @@ export EVIDENCE="$SOAK_ENV/evidence"
 : "${OLD_NMS_IP:?env.local 缺 OLD_NMS_IP（现网 NMS；重建后由 S0 经 DO 盘点自动纠正）}"
 : "${FW_SOAK_NMS_ID:?env.local 缺 FW_SOAK_NMS_ID（DO 防火墙 ID）}"
 : "${NMS_ACCOUNT:?env.local 缺 NMS_ACCOUNT（NMS 固定账号；禁止在 driver 写账号名常量）}"
-export NODE_PASS EGRES_EXPECT OLD_NMS_IP FW_SOAK_NMS_ID NMS_ACCOUNT
+export NODE_PASS EGRES_EXPECT OLD_NMS_IP FW_SOAK_NMS_ID NMS_ACCOUNT AUTHORIZED_KEY
 
 # ---- 非机密缺省（可被 env.local 覆盖）----
 export NMS2_REPO="${NMS2_REPO:-$HOME/NMS2}"

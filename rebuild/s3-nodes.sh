@@ -38,7 +38,7 @@ EXPREG[$NMS_REGION]=$(( ${EXPREG[$NMS_REGION]:-0} + 1 ))
 PLAN_STR="$(for k in "${!ACCT_PLAN[@]}"; do echo "$k:${ACCT_PLAN[$k]}"; done | tr '\n' ' ')"
 REGION_EXPECT="$(for k in "${!EXPREG[@]}"; do echo -n "$k=${EXPREG[$k]},"; done | sed 's/,$//')"
 # 分布表落盘，供 S4 断言区域计数（单一来源，S4 不复写表）
-printf '%s\n' "${BATCHES[@]}" | awk '{print $1, $3}' > "$EVIDENCE/s3/distribution.txt"
+printf '%s\n' "${BATCHES[@]}" | awk '{a[$1]+=$3} END {for (r in a) print r, a[r]}' > "$EVIDENCE/s3/distribution.txt"  # 按区域聚合：同区域多账号时逐行会产生重复键，S4 dict 读取互覆
 
 # 区域内 env:soak active 台数（剔除 NMS 机；<inv.json> <region>）
 region_active_count() {

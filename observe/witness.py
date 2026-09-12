@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""witness：30s 采样 NMS 三端点（/nodes /alerts /agent-deploy）→ $SOAK_ENV/evidence/witness.jsonl（阶段一全程运行）。
+"""witness：30s 采样 NMS 四端点（/nodes /alerts /agent-deploy /topology）→ $SOAK_ENV/evidence/witness.jsonl（阶段一全程运行）。
+拓扑采样（D8 卫生批）：parent 映射 {target: source} 逐样本入档，树形时间线可回放
+（挂接/重挂/疏散全过程不再只靠 g5 终态验收一件）。
 证据根经 SOAK_ENV 注入（运行时目录，含 evidence/）；用法：
   SOAK_ENV=<运行时目录> python3 scripts/soak/observe/witness.py
 """
@@ -35,6 +37,11 @@ while True:
         dep = get('/agent-deploy')
         if dep is not None:
             rec['deploy_rounds'] = [(i.get('deploy_id'), i.get('status'), i.get('nodes')) for i in dep.get('items', [])]
+        topo = get('/topology')
+        if topo:
+            links = topo.get('links', [])
+            rec['topo_links'] = len(links)
+            rec['topo_parents'] = {l['target']: l['source'] for l in links}
     except Exception as e:
         rec['error'] = repr(e)
     with open(OUT, 'a') as f:

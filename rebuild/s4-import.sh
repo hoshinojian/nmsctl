@@ -62,6 +62,8 @@ print("domain0 清单 =", sorted(domain0_ids), "（审计件 evidence/s4/domain0
 EOF
 
 log "POST /topology（$NODE_COUNT 台入池，onboard 缺省 false）"
+log "导入前快照（D2：全集口径断言仅在 NMS 侧为空=全新导入时启用，续跑免挂）"
+api GET /nodes > "$EVIDENCE/s4/nodes-before-import.json"
 ssh $SSHOPT -p 22 "root@$(nms_ip)" \
   "curl -sS -m 60 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:80/api/v1/topology" \
   < "$EVIDENCE/s4/import-payload.json" > "$EVIDENCE/s4/import-resp.json"
@@ -71,17 +73,40 @@ import json, os; d=json.load(open('evidence/s4/import-resp.json'))
 assert d.get('status') == 'imported' and d.get('nodes') == int(os.environ['NODE_COUNT']), d
 print('import resp OK')"
 
-log "G3 断言：$NODE_COUNT 台全 idle ∧ onboard=false ∧ domain0 恰 $FIRST_HOP_COUNT"
+log "G3 断言（D2 状态无关化）：payload id 集为准——入库齐全 + domain 对齐审计件；全集状态分布只记录，全集口径断言仅全新导入启用"
 api GET /nodes > "$EVIDENCE/s4/nodes-after-import.json"
 python3 - <<'EOF'
-import json, os
-NC = int(os.environ['NODE_COUNT']); FH = int(os.environ['FIRST_HOP_COUNT'])
-items = json.load(open('evidence/s4/nodes-after-import.json'))['items']
-assert len(items) == NC, len(items)
-bad = [n['id'] for n in items if n['role'] != 'idle' or n['onboard'] is not False]
-assert not bad, f"非 idle/onboard: {bad}"
-d0 = sorted(n['id'] for n in items if n['domain'] == 0)
-assert len(d0) == FH, d0
-print(f"G3 OK: {NC} idle, domain0 ={d0}")
+import collections, json, os
+NC = int(os.environ['NODE_COUNT'])
+payload_ids = [n['id'] for n in json.load(open('evidence/s4/import-payload.json'))['nodes']]
+before = json.load(open('evidence/s4/nodes-before-import.json'))['items']
+after = json.load(open('evidence/s4/nodes-after-import.json'))['items']
+by_id = {n['id']: n for n in after}
+
+# 实质门①：payload 全部入库（总入库数==NC 已由 import resp 断言）
+missing = [i for i in payload_ids if i not in by_id]
+assert not missing, f"payload 未入库: {missing}"
+
+# 实质门②：payload id 的 domain 标注对齐 domain0-selection.json 审计件
+d0sel = set(json.load(open('evidence/s4/domain0-selection.json'))['domain0'])
+mismatch = sorted(i for i in payload_ids if (by_id[i]['domain'] == 0) != (i in d0sel))
+assert not mismatch, f"domain 标注与审计件不符: {mismatch}"
+
+# 全集状态分布只记录不断言（D2）：续跑重导入会把在树 id 的 role 覆写回 idle
+#（payload 不带 role，导入缺省 idle）而 onboard 不触碰——分布显形该设计内状态，留痕。
+dist = dict(collections.Counter(f"role={n['role']}|onboard={n['onboard']}" for n in after))
+fresh = len(before) == 0
+json.dump({"fresh_import": fresh, "before": len(before), "after": len(after),
+           "distribution": dist,
+           "note": "续跑重导入 role 缺省覆写 idle、onboard 不触碰，属设计内状态（post-campaign-fixes-plan D2）"},
+          open('evidence/s4/g3-distribution.json', 'w'), ensure_ascii=False, indent=1)
+
+# 全集口径断言（「导入后全 idle∧onboard=false」全新库假设）仅在导入前为空时启用
+if fresh:
+    bad = [n['id'] for n in after if n['role'] != 'idle' or n['onboard'] is not False]
+    assert not bad, f"非 idle/onboard: {bad}"
+    print(f"G3 OK (fresh): {len(after)} 台全 idle ∧ onboard=false")
+else:
+    print(f"G3 OK (resume): payload {NC} 台入库齐全 ∧ domain 对齐审计件；全集分布（记录不断言）: {dist}")
 EOF
-gate S4 PASS "$NODE_COUNT 台入池全 idle"
+gate S4 PASS "$NODE_COUNT 台入池（D2 口径：payload id 集，状态无关）"

@@ -40,19 +40,7 @@ json.dump({"accounts": nms_acct}, open('evidence/s2/accounts-nms.json', 'w'))
 os.chmod('evidence/s2/accounts-nms.json', 0o600)
 EOF
 log "实例化 user-data 模板（__NODE_PASS__ ← env.local NODE_PASS；仓内模板零凭据，实例化件落运行时目录不入库）"
-python3 - "$SOAK_HOME/rebuild/nms-user-data6-ascii.sh" "$REBUILD_DIR/nms-user-data6-ascii.sh" <<'PYEOF'
-import os, sys
-tpl_path, out_path = sys.argv[1], sys.argv[2]
-tpl = open(tpl_path).read()
-assert '__NODE_PASS__' in tpl, "user-data 模板缺 __NODE_PASS__ 占位"
-assert '__AUTHORIZED_KEY__' in tpl, "user-data 模板缺 __AUTHORIZED_KEY__ 占位"
-pw = os.environ['NODE_PASS']
-assert '__NODE_PASS__' not in pw
-ak = os.environ.get('AUTHORIZED_KEY', '').strip()
-assert ak and '__AUTHORIZED_KEY__' not in ak, 'AUTHORIZED_KEY 未设置（节点 root authorized_keys 注入用）'
-open(out_path, 'w').write(tpl.replace('__NODE_PASS__', pw).replace('__AUTHORIZED_KEY__', ak))
-os.chmod(out_path, 0o600)
-PYEOF
+instantiate_user_data "$SOAK_HOME/rebuild/nms-user-data6-ascii.sh" "$REBUILD_DIR/nms-user-data6-ascii.sh"
 "$VPSCTL" create -accounts "$TMPACCT" -image ubuntu-24-04-x64 -region "$NMS_REGION" -size s-4vcpu-8gb \
   -count 1 -name-prefix "$NMS_NAME_PREFIX" \
   -user-data "$REBUILD_DIR/nms-user-data6-ascii.sh" -tags env:soak -wait 600s \

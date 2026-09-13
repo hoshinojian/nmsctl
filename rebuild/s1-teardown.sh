@@ -29,6 +29,9 @@ print(len(items), len(bad))
 if bad: print('BADTAG:', bad, file=__import__('sys').stderr)")"
 
 if [ "$PRE_N" = "0" ] && [ "$S0_N" = "0" ]; then
+  # 良性跳过也要落 post-inventory.json（零残留盘点）——s2 以它为「S1 已执行」前置，
+  # 缺文件会让「上轮已拆→重跑」流程在 s2 直接 ABORT（实机轮 2026-09-12 实证）。
+  cp "$EVIDENCE/s1/pre-inventory.json" "$EVIDENCE/s1/post-inventory.json"
   log "SKIP：盘点 0 台 ∧ S0 已判定无现网 fleet（上轮已拆）——无可拆，良性退出"
   exit 0
 fi

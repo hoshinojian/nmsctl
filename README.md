@@ -201,6 +201,12 @@ bash churn/run-r-wave.sh                   # 或 SCENARIOS="r1 r3" 跑子集
 - **断言不依赖异步时序**：收敛看终态与轮询，不 sleep 赌运气；
 - **删除类操作永不裸奔**：tag 圈定 + 台数双计数 + 删后清零复核；
 - **ASCII-only user-data**：云厂商链路可能对非 ASCII 二次编码毁掉自举脚本（血泪教训），模板内禁非 ASCII；
+- **s5 双形态门限**：s5 开跑先查 `/agent-deploy` 历史部署轮判形态——有历史轮=resume（救援续跑），否则
+  fresh（判据依据：s1 拆除含 NMS ⇒ 库里有部署历史 ⟺ 续跑；误判只可能把续跑判成 fresh=从严，安全方向）。
+  fresh 轮数上限按构成式显式化（主轮 1 + 部分失败自动重排 1 + late-join 补试 ≤2）；resume 改终态口径：
+  轮数/深度只记录不断言（form/waves/max_depth_seen 落 `evidence/s5/g4-verdict.json`），但收敛 NC/NC、
+  末轮 succeeded、零「无可用备选父」签名三项不放宽；G5' 深度 resume 放宽到 7（服务端 discover engine
+  `max_depth` 键缺省，可配），fresh 维持 4；收敛窗可经 `S5_DEADLINE` env 覆盖（缺省 1800s）；
 - **每步留证据**：所有断言的输入输出落盘，报告里的每个数字都能回放。
 
 ## 边界声明

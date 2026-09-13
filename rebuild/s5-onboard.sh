@@ -1,10 +1,11 @@
 #!/bin/bash
 # S5 批量开键：1s 窗内 $NODE_COUNT 个 PUT onboard=true（#184 合批）→ 收敛轮询 → G4'/G5'
-# T3 必改（scale-coldstart-churn-plan §一 T3 / §二 G4'）：
-#   - G4 改 ≤2 轮口径（:86「恰 1 轮」已被 #200 自动重排作废）：终轮 succeeded ∧ 终轮 nodes=$NODE_COUNT
-#     ∧ 无 partial 挂终态；若 2 轮则第 1 轮必须 partial（自动重排语义），重排触发单列记录；
-#   - 零「无可用备选父」签名（T2 生效判据，journal 全量 grep，出现即 FAIL 按新缺陷处置）；
-#   - 28→64 全参数化；DEADLINE=1800 保持（64 台估 8-15min）。
+# T3 必改（scale-coldstart-churn-plan §一 T3 / §二 G4'）+ 自愈收口计划 C 项（双形态门限）：
+#   - G4' 按形态分支（开跑查 /agent-deploy 历史轮判 fresh/resume）：fresh 轮数上限=构成式
+#     （主轮1+F3重排1+late-join≤2）∧ 末轮 succeeded；resume（救援续跑）轮数/深度只记录不断言，
+#     判据=收敛 NC/NC ∧ 三值终态无悬挂 ∧ 末轮 succeeded；
+#   - 零「无可用备选父」签名（T2 生效判据，journal 全量 grep，出现即 FAIL 按新缺陷处置；双形态均不放宽）；
+#   - 28→64 全参数化；收敛窗 S5_DEADLINE env 可覆盖（缺省 1800s，64 台估 8-15min）。
 set -euo pipefail
 SOAK_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 仓内定位：scripts/soak/rebuild
 source "$SOAK_SELF_DIR/../lib/env.sh"   # SOAK_ENV(运行时目录)+env.local 注入（零凭据入库，coldstart §四）
@@ -16,6 +17,18 @@ check_egress
 EXPECT_VER=$(cat "$EVIDENCE/expected-agent-version.txt")
 log "开键目标：$NODE_COUNT 台（onboard=false）"
 api GET /nodes > "$EVIDENCE/s5/nodes-before.json"
+# 形态判定（自愈收口计划 C 项）：/agent-deploy 已有历史部署轮（items 非空）⇒ resume（救援续跑），否则 fresh。
+# 判据依据：s1 拆除含 NMS ⇒ 库里有部署历史 ⟺ 续跑；唯一误判组合「NMS 重建而 fleet 幸存」误判为
+# fresh=从严（按全新跑门限断言），安全方向。
+api GET /agent-deploy > "$EVIDENCE/s5/agent-deploy-before.json"
+read -r FORM HIST_ROUNDS <<< "$(python3 - <<'EOF'
+import json
+items = json.load(open('evidence/s5/agent-deploy-before.json')).get('items', [])
+print(('resume' if items else 'fresh'), len(items))
+EOF
+)"
+echo "$FORM" > "$EVIDENCE/s5/form.txt"
+log "形态判定：$FORM（/agent-deploy 历史部署轮 $HIST_ROUNDS 条，已落盘 evidence/s5/form.txt）"
 # 目标 = 未收敛节点（非 managed/online/collection_ok）——全新跑=全部，续跑=滞留子集；
 # 爆发动作统一为 P74 舞步（先 false 后 true）：fresh 节点 false 为无害空操作，滞留 true 节点借 false 清翻转位
 IDS=$(python3 -c "
@@ -56,8 +69,10 @@ done < "$EVIDENCE/s5/burst-codes.txt"
 T1=$(date +%s%3N)
 log "$N_TARGETS 个目标发射完毕，墙钟 $((T1 - T0)) ms"
 
-log "收敛轮询（5s 间隔，上限 30min；挂树数经 GET /topology tree.nodes 统计）"
-DEADLINE=$(( $(date +%s) + 1800 ))
+log "收敛轮询（5s 间隔，上限 ${S5_DEADLINE:-1800}s；挂树数经 GET /topology tree.nodes 统计）"
+# 收敛窗参数化（自愈收口计划 C 项）：S5_DEADLINE env 覆盖口径——救援续跑历史轮多、收敛更慢，
+# 30min 不够时经环境/env.local 注入更大值，不改脚本；缺省 1800s（64 台全新跑估 8-15min，留富余）。
+DEADLINE=$(( $(date +%s) + ${S5_DEADLINE:-1800} ))
 START=$(date +%s); LATEJOIN_PASSES=0; LAST_LATEJOIN=0
 # late-join 补试：合批窗口关闭后到达的 PUT 会撞 #122 单飞被弹回（idle ∧ onboard=true 滞留），
 # P74 口径本为人工重翻——零人工目标下由本回路自动化：有界 2 轮、逐轮留痕、仅在无在飞轮时执行
@@ -117,10 +132,10 @@ done
 if [ -z "$converged" ]; then
   api GET /nodes > "$EVIDENCE/s5/nodes-partial.json" 2>/dev/null || true
   api GET "/alerts?status=active&limit=200" > "$EVIDENCE/s5/alerts-partial.json" 2>/dev/null || true
-  gate S5 FAIL "30min 未收敛：$STATUS（现场已落盘 nodes-partial.json）"
+  gate S5 FAIL "收敛窗（S5_DEADLINE=${S5_DEADLINE:-1800}s）耗尽未收敛：$STATUS（现场已落盘 nodes-partial.json）"
 fi
 
-log "G4' 断言：轮数 ≤2（主轮+自动重排轮）、终轮 succeeded ∧ nodes=$NODE_COUNT、无 partial 挂终态；重排触发单列记录"
+log "G4' 断言（form=$FORM）：fresh=构成式上限（主轮1+F3重排1+late-join≤2）∧ 无悬挂轮 ∧ 末轮 succeeded；resume=轮数只记录不断言（三值终态 ∧ 末轮 succeeded）；重排触发单列记录"
 export LATEJOIN_PASSES   # G4' python 子进程读取
 api GET /agent-deploy > "$EVIDENCE/s5/agent-deploy-final.json"
 api GET /nodes > "$EVIDENCE/s5/nodes-final.json"
@@ -129,31 +144,54 @@ python3 - <<'EOF'
 import json, os
 NC = int(os.environ['NODE_COUNT'])
 ver = open('evidence/expected-agent-version.txt').read().strip()
+form = open('evidence/s5/form.txt').read().strip()
+assert form in ('fresh', 'resume'), f"形态判定非法: {form!r}（evidence/s5/form.txt）"
 dep = json.load(open('evidence/s5/agent-deploy-final.json'))['items']
 rounds = [(i.get('deploy_id'), i.get('status'), i.get('nodes')) for i in dep]
-assert 1 <= len(dep) <= 4, f"部署轮数 {len(dep)} > 4（超出主轮+自动重排+late-join 补试+救援轮口径）: {rounds}"
-# 2026-09-12 满配额救援语境：前序失败尝试的历史轮持久于 agent_deploys，len 上限按实际放宽；判据核心=终态全收敛
-assert all(i.get('status') in ('succeeded', 'partial') for i in dep), f"存在非终态（悬挂）轮: {rounds}"
+assert dep, "agent-deploy 无任何部署轮（异常：收敛门已过但零轮）"
+# fresh 轮数上限构成式（自愈收口计划 C 项：替换裸 len<=4，各系数来源显式可追溯）：
+#   主轮 1         —— #184 合批：同窗开键 PUT 合并为单轮部署；
+#   + F3 重排 1    —— #200 轮内传输类失败集自动重排：一次、不回 idle、不成环（allowRequeue=false）；
+#   + late-join ≤2 —— 本脚本补试回路硬上限（LATEJOIN_PASSES<2，仅无在飞轮时执行）。
+FRESH_MAX_WAVES = 1 + 1 + 2   # = 4
+# 预留：A 项（provision 自动重纳管 reconciler）合入后，此构成式追加 A 重试系数（30min 窗 ≤2 次）
+# 并需一轮实机校准——自愈收口计划执行序 C3 依赖边（A→C 合并序）。
+if form == 'fresh':
+    assert 1 <= len(dep) <= FRESH_MAX_WAVES, \
+        f"部署轮数 {len(dep)} 超出 fresh 构成式上限（主轮1+F3重排1+late-join≤2={FRESH_MAX_WAVES}）: {rounds}"
+    # fresh 无历史轮：任何非终态即悬挂，只许 succeeded/partial（failed 历史轮仅 resume 形态合法）
+    assert all(i.get('status') in ('succeeded', 'partial') for i in dep), f"存在非终态（悬挂）轮: {rounds}"
+else:
+    # resume（救援续跑）：前序失败尝试的历史轮持久于 agent_deploys（2026-09-12 满配额实机 11 轮实证），
+    # 轮数只记录不断言（g4-verdict.json 落 waves，积累实机数据后再议上限——自愈收口计划 C 项）。
+    # 判据②：全部轮无悬挂——三值终态放宽（succeeded/partial/failed，历史 failed 轮合法）∧ 末轮 succeeded。
+    assert all(i.get('status') in ('succeeded', 'partial', 'failed') for i in dep), f"存在非终态（悬挂）轮: {rounds}"
 dep_sorted = sorted(dep, key=lambda i: i['deploy_id'])   # deploy_id 单调，末位=终轮
 last = dep_sorted[-1]
-assert last['status'] == 'succeeded', f"终轮 {last.get('status')} != succeeded（partial 挂终态）: {rounds}"
+assert last['status'] == 'succeeded', f"终轮 {last.get('status')} != succeeded（partial/failed 挂终态）: {rounds}"
 # 终轮台数断言移除：late-join 补试轮只含滞留子集；完整性由下方全 fleet managed 断言承担（决策 #125 批）
-reroute = len(dep_sorted) == 2
-if reroute:
-    assert dep_sorted[0]['status'] == 'partial', \
-        f"第 1 轮 {dep_sorted[0]['status']} != partial（2 轮口径要求首轮 partial，自动重排语义）: {rounds}"
+reroute = False
+if form == 'fresh':
+    # fresh 的 2 轮口径：恰 2 轮时首轮必须 partial（自动重排语义）；resume 历史轮无此约束（只记录）
+    reroute = len(dep_sorted) == 2
+    if reroute:
+        assert dep_sorted[0]['status'] == 'partial', \
+            f"第 1 轮 {dep_sorted[0]['status']} != partial（2 轮口径要求首轮 partial，自动重排语义）: {rounds}"
 items = json.load(open('evidence/s5/nodes-final.json'))['items']
 badrole = [n['id'] for n in items if not (n['role'] == 'managed' and n['status'] == 'online' and n['collection_state'] == 'collection_ok')]
 assert not badrole, badrole
 badver = {n['id']: n.get('agent_version') for n in items if n.get('agent_version') != ver}
 assert not badver, f"agent 版本不符: {badver}"
 alerts = json.load(open('evidence/s5/alerts-final.json'))
-onb = [a for a in alerts.get('items', []) if 'onboard' in str(a.get('type', ''))]
+onb = [a for a in alerts.get('items', []) if 'onboard' in str(a.get('alert_type') or a.get('type') or '')]
 assert not onb, f"onboard_failed active: {onb}"
-json.dump({"rounds": rounds, "reroute_triggered": reroute, "latejoin_passes": LATEJOIN_PASSES,
+json.dump({"form": form, "s5_deadline": int(os.environ.get('S5_DEADLINE', '1800')), "waves": len(dep),
+           "rounds": rounds, "reroute_triggered": reroute, "latejoin_passes": int(os.environ.get('LATEJOIN_PASSES', '0')),
            "terminal": {"deploy_id": last.get('deploy_id'), "status": last.get('status'), "nodes": last.get('nodes')}},
           open('evidence/s5/g4-verdict.json', 'w'), ensure_ascii=False, indent=1)
-print(f"G4' OK: 轮数={len(dep)} 重排触发={reroute}（证据 evidence/s5/g4-verdict.json）; 终轮 succeeded nodes={NC}; "
+waves_note = f"（构成式上限 {FRESH_MAX_WAVES}）" if form == 'fresh' else "（resume 只记录不断言）"
+print(f"G4' OK（form={form}）: 轮数={len(dep)}{waves_note} 重排触发={reroute}（证据 evidence/s5/g4-verdict.json）; "
+      f"终轮 succeeded nodes={NC}; "
       f"{NC}/{NC} managed/online/collection_ok; 版本={ver}; active 告警 {alerts.get('total', len(alerts.get('items', [])))} 条（onboard 类 0）")
 EOF
 
@@ -164,8 +202,21 @@ NOCAND="${NOCAND:-0}"
 [ "$NOCAND" = "0" ] || gate S5 FAIL "journal 出现「无可用备选父」签名 $NOCAND 次（T2 生效判据被触发）——按新缺陷处置，签名样本已落盘 evidence/s5/nocandidate-signature.txt"
 log "签名计数 $NOCAND（0=通过）"
 
-log "G5' 断言：树形不变量（全 $NODE_COUNT managed、出度≤$CHILD_BUDGET、深度≤4、links 全物化、第一跳=$FIRST_HOP_COUNT）"
+# G5' 深度门限按形态传参（自愈收口计划 C 项）：fresh 维持缺省 4；resume 传 7——锚定 discover
+# engine 的 max_depth 配置键缺省值（engine.go 可配；2026-09-12 满配额实机救援轮曾见深度 5、fleet 实质健康）。
+G5_MAX_DEPTH=4
+if [ "$FORM" = "resume" ]; then G5_MAX_DEPTH=7; fi
+log "G5' 断言：树形不变量（全 $NODE_COUNT managed、出度≤$CHILD_BUDGET、深度≤$G5_MAX_DEPTH、links 全物化、第一跳=$FIRST_HOP_COUNT）"
 api GET /topology > "$EVIDENCE/s5/topology.json"
 python3 "$SOAK_HOME/observe/g5-tree.py" "$EVIDENCE/s5/topology.json" "$EVIDENCE/s5/tree-analysis.json" \
-  --nodes "$NODE_COUNT" --first-hop "$FIRST_HOP_COUNT" --child-budget "$CHILD_BUDGET"
+  --nodes "$NODE_COUNT" --first-hop "$FIRST_HOP_COUNT" --child-budget "$CHILD_BUDGET" --max-depth "$G5_MAX_DEPTH"
+# g4-verdict.json 补记 max_depth_seen（C 项：resume 深度只记录不断言，从 g5-tree.py 落盘的
+# tree-analysis.json 取回；fresh 同样记录供后续门限校准参考。放在 G5' 之后是因为该文件此刻才存在）
+python3 - <<'EOF'
+import json
+v = json.load(open('evidence/s5/g4-verdict.json'))
+v['max_depth_seen'] = json.load(open('evidence/s5/tree-analysis.json')).get('max_depth_seen')
+json.dump(v, open('evidence/s5/g4-verdict.json', 'w'), ensure_ascii=False, indent=1)
+print(f"g4-verdict.json 补记 max_depth_seen={v['max_depth_seen']}（form={v.get('form')}）")
+EOF
 gate S5 PASS "批量开键收敛 + 树形不变量合规"

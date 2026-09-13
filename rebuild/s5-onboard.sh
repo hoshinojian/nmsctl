@@ -40,9 +40,14 @@ ids = [n['id'] for n in items
 assert 0 <= len(ids) <= nc, f'未收敛节点 {len(ids)} 超出总量 {nc}'
 print('\n'.join(sorted(ids)))")
 echo "$IDS" > "$EVIDENCE/s5/onboard-ids.txt"
-N_TARGETS=$(wc -l < "$EVIDENCE/s5/onboard-ids.txt" | tr -d ' ')
+# 零目标正确计数（resume 复跑常态：echo "" 会写出一个空行，wc -l 误计 1——
+# 2026-09-13 验收轮实证，剥空行后按非空行计）
+N_TARGETS=$(grep -c . "$EVIDENCE/s5/onboard-ids.txt" || true)
 log "开键/补试目标：$N_TARGETS/$NODE_COUNT 台未收敛"
 
+if [ "$N_TARGETS" = "0" ]; then
+  log "零未收敛目标：跳过 burst（全 fleet 已收敛，直接进入 G4'/G5' 断言）"
+else
 log "同一窗内连发 $N_TARGETS 个 P74 舞步 PUT（计时）"
 T0=$(date +%s%3N)
 # 爆发开键：脚本推到 NMS 本机执行（loopback 并发 <1s，保住 #184 的 1s 合批窗口；
@@ -68,6 +73,7 @@ done < "$EVIDENCE/s5/burst-codes.txt"
 [ "$PUT_FAIL" = "0" ] || { echo "GATE S5: FAIL — 开键 PUT 存在失败响应"; exit 1; }
 T1=$(date +%s%3N)
 log "$N_TARGETS 个目标发射完毕，墙钟 $((T1 - T0)) ms"
+fi  # N_TARGETS != 0（零目标跳过 burst——burst 零参会因空 $@ 不建码文件而 sort 失败）
 
 log "收敛轮询（5s 间隔，上限 ${S5_DEADLINE:-1800}s；挂树数经 GET /topology tree.nodes 统计）"
 # 收敛窗参数化（自愈收口计划 C 项）：S5_DEADLINE env 覆盖口径——救援续跑历史轮多、收敛更慢，
@@ -135,7 +141,7 @@ if [ -z "$converged" ]; then
   gate S5 FAIL "收敛窗（S5_DEADLINE=${S5_DEADLINE:-1800}s）耗尽未收敛：$STATUS（现场已落盘 nodes-partial.json）"
 fi
 
-log "G4' 断言（form=$FORM）：fresh=构成式上限（主轮1+F3重排1+late-join≤2）∧ 无悬挂轮 ∧ 末轮 succeeded；resume=轮数只记录不断言（三值终态 ∧ 末轮 succeeded）；重排触发单列记录"
+log "G4' 断言（form=$FORM）：fresh=构成式上限（主轮1+F3重排1+late-join≤2+A重试≤2）∧ 无悬挂轮 ∧ 末轮 succeeded；resume=轮数只记录不断言（三值终态 ∧ 末轮 succeeded）；重排触发单列记录"
 export LATEJOIN_PASSES   # G4' python 子进程读取
 api GET /agent-deploy > "$EVIDENCE/s5/agent-deploy-final.json"
 api GET /nodes > "$EVIDENCE/s5/nodes-final.json"
@@ -152,8 +158,11 @@ assert dep, "agent-deploy 无任何部署轮（异常：收敛门已过但零轮
 # fresh 轮数上限构成式（自愈收口计划 C 项：替换裸 len<=4，各系数来源显式可追溯）：
 #   主轮 1         —— #184 合批：同窗开键 PUT 合并为单轮部署；
 #   + F3 重排 1    —— #200 轮内传输类失败集自动重排：一次、不回 idle、不成环（allowRequeue=false）；
-#   + late-join ≤2 —— 本脚本补试回路硬上限（LATEJOIN_PASSES<2，仅无在飞轮时执行）。
-FRESH_MAX_WAVES = 1 + 1 + 2 + 2   # = 6（A 重试 ≤2：#127/PR #244 已合入，C3 依赖边兑现）
+#   + late-join ≤2 —— 本脚本补试回路硬上限（LATEJOIN_PASSES<2，仅无在飞轮时执行）；
+#   + A 重试 ≤2    —— #127 provision 自动重纳管（PR #244 已合入）：failBack 后对账循环
+#                     自动重发 ≤2 次（30min 窗），每次重试各产生一轮。C3 依赖边已兑现：
+#                     系数随 A 合入追加；满配额验收轮实测后如需再校准另行小 PR。
+FRESH_MAX_WAVES = 1 + 1 + 2 + 2   # = 6
 if form == 'fresh':
     assert 1 <= len(dep) <= FRESH_MAX_WAVES, \
         f"部署轮数 {len(dep)} 超出 fresh 构成式上限（主轮1+F3重排1+late-join≤2+A重试≤2={FRESH_MAX_WAVES}）: {rounds}"

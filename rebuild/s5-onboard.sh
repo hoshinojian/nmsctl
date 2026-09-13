@@ -153,12 +153,10 @@ assert dep, "agent-deploy 无任何部署轮（异常：收敛门已过但零轮
 #   主轮 1         —— #184 合批：同窗开键 PUT 合并为单轮部署；
 #   + F3 重排 1    —— #200 轮内传输类失败集自动重排：一次、不回 idle、不成环（allowRequeue=false）；
 #   + late-join ≤2 —— 本脚本补试回路硬上限（LATEJOIN_PASSES<2，仅无在飞轮时执行）。
-FRESH_MAX_WAVES = 1 + 1 + 2   # = 4
-# 预留：A 项（provision 自动重纳管 reconciler）合入后，此构成式追加 A 重试系数（30min 窗 ≤2 次）
-# 并需一轮实机校准——自愈收口计划执行序 C3 依赖边（A→C 合并序）。
+FRESH_MAX_WAVES = 1 + 1 + 2 + 2   # = 6（A 重试 ≤2：#127/PR #244 已合入，C3 依赖边兑现）
 if form == 'fresh':
     assert 1 <= len(dep) <= FRESH_MAX_WAVES, \
-        f"部署轮数 {len(dep)} 超出 fresh 构成式上限（主轮1+F3重排1+late-join≤2={FRESH_MAX_WAVES}）: {rounds}"
+        f"部署轮数 {len(dep)} 超出 fresh 构成式上限（主轮1+F3重排1+late-join≤2+A重试≤2={FRESH_MAX_WAVES}）: {rounds}"
     # fresh 无历史轮：任何非终态即悬挂，只许 succeeded/partial（failed 历史轮仅 resume 形态合法）
     assert all(i.get('status') in ('succeeded', 'partial') for i in dep), f"存在非终态（悬挂）轮: {rounds}"
 else:

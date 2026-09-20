@@ -61,9 +61,44 @@ nms_ip() {
 }
 # NMS API 基址在 api() 内动态取（nms-ip.txt 由 s2 写出）
 
-# 管理通道走 22：S0 实证本地→DO 的 22 阻断已消失且 fw-soak-nms 入站放行 22（2026-08 的阻断记录已过时）。
-# 2222 因 Ubuntu 24.04 sshd 走 socket 激活不生效（S2 实测 refused），弃用。
+# 管理通道（R+L 演练 Step0 实录 2026-09-20 双形态）：缺省直连 22（2026-08 阻断已消失，
+# fw-soak-nms 放行 22；2222 因 Ubuntu 24.04 sshd socket 激活不生效，弃用）。
+# NMS_SSH_VIA=stunnel443：编排机本地代理 TUN 截直连 22 裸流（TCP 建连后 kex 前被断，
+# github:22 同症 fake-IP 198.18.x），443 裸 IP 放行——走 user-data6 预置的 stunnel
+# ssh-over-443。实现=维护 ~/.ssh/config 托管 Match 块（按 nms-ip.txt 幂等更新，见下），
+# 全部裸 ssh/scp $SSHOPT 调用点零改动自动生效；fw-soak-nms 须放行 443。
+export NMS_SSH_VIA="${NMS_SSH_VIA:-direct}"
 export SSHOPT="-o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=5"
+if [ "$NMS_SSH_VIA" = "stunnel443" ]; then
+  nms_ssh_cfg_update() {  # 幂等维护 ~/.ssh/config 的 nmsctl 托管块（s2 前 nms-ip.txt 缺失则跳过）
+    local ip cfg="$HOME/.ssh/config" begin="# BEGIN nmsctl-managed (stunnel443)" end="# END nmsctl-managed"
+    [ -f "$NMS_IP_FILE" ] || return 0
+    ip=$(cat "$NMS_IP_FILE") || return 0
+    case "$ip" in (*[!0-9.]*|'') return 0;; esac
+    local block="$begin
+Match host $ip
+  ProxyCommand openssl s_client -quiet -verify_quiet -connect %h:443 2>/dev/null
+$end"
+    mkdir -p "$HOME/.ssh" && touch "$cfg"
+    if grep -qF "$begin" "$cfg"; then
+      python3 - "$cfg" "$block" "$begin" "$end" <<'PYEOF'
+import sys
+cfg, block, begin, end = sys.argv[1:5]
+lines = open(cfg).read().splitlines()
+try:
+    i, j = lines.index(begin), lines.index(end)
+    lines[i:j + 1] = block.splitlines()
+except ValueError:
+    lines += [""] + block.splitlines()
+open(cfg, "w").write("\n".join(lines) + "\n")
+PYEOF
+    else
+      printf '\n%s\n' "$block" >> "$cfg"
+    fi
+    chmod 600 "$cfg"
+  }
+  nms_ssh_cfg_update
+fi
 nms_ssh() { ssh $SSHOPT -p 22 "root@$(nms_ip)" "$@"; }
 nms_scp() { scp $SSHOPT -P 22 "$@"; }
 

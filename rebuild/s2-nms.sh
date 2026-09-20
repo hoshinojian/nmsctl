@@ -23,10 +23,20 @@ cd "$REBUILD_DIR"
 log "建 NMS 机（s-4vcpu-8gb/$NMS_REGION，user-data6，等 active；已有 nms.json 则续跑复用）"
 # P70①：账号 ssh_password 与 --user-data 互斥——NMS 建机用去掉密码的临时账号配置
 # （密码由 user-data 模板自设，同一值）；临时配置只含 NMS_ACCOUNT（env.local 注入）。
-if [ -f "$EVIDENCE/s2/nms.json" ] && ssh $SSHOPT -p 22 "root@$(python3 -c "import json;print(json.load(open('evidence/s2/nms.json'))['ip'])")" true 2>/dev/null; then
+# 复用探针带重试（Round1 实录：stunnel443 通道冷启动瞬断一次即判死，白重建一台机）：
+# 3 次×10s 间隔，全败才清记录重建。
+reuse_ok=""
+if [ -f "$EVIDENCE/s2/nms.json" ]; then
+  OLD_IP=$(python3 -c "import json;print(json.load(open('evidence/s2/nms.json'))['ip'])")
+  for _try in 1 2 3; do
+    if ssh $SSHOPT -p 22 "root@$OLD_IP" true 2>/dev/null; then reuse_ok=1; break; fi
+    [ "$_try" = "3" ] || sleep 10
+  done
+fi
+if [ -n "$reuse_ok" ]; then
   log "续跑：复用已建 droplet $(python3 -c "import json;d=json.load(open('evidence/s2/nms.json'));print(d['name'],d['ip'],d['id'])")"
 else
-  [ -f "$EVIDENCE/s2/nms.json" ] && log "记录的 droplet 已不可达——清记录重建"
+  [ -f "$EVIDENCE/s2/nms.json" ] && log "记录的 droplet 3 次探活全败——清记录重建"
   rm -f "$EVIDENCE/s2/nms.json"
 TMPACCT="$EVIDENCE/s2/accounts-nms.json"
 python3 - <<'EOF'
@@ -124,13 +134,26 @@ if int(droplet) not in fw['droplet_ids']:
     call('POST', f'/firewalls/{fw_id}/droplets', {"droplet_ids": [int(droplet)]})
     fw = call('GET', f'/firewalls/{fw_id}')['firewall']
 assert int(droplet) in fw['droplet_ids'], fw['droplet_ids']
+# 期望面（P71 单源纪律 + stunnel443 形态）：direct={22,80}；stunnel443={22,443,80}（TUN 截
+# 直连 22 的管理通道，Round1 实录）。先塑形（补缺端口/收敛单源=当前出口）再强断言——
+# 塑形幂等，手工预改过防火墙也不炸（此前 Step0 预加 443+双源曾把严格相等断言打红）。
+want_ports = ['22', '80'] + (['443'] if os.environ.get('NMS_SSH_VIA') == 'stunnel443' else [])
+src = [os.environ['EGRES_EXPECT'] + '/32']
+have_tcp = {r['ports']: r['sources'].get('addresses') for r in fw['inbound_rules'] if r['protocol'] == 'tcp'}
+if sorted(have_tcp) != sorted(want_ports) or any(have_tcp.get(p) != src for p in want_ports):
+    rebuilt = [r for r in fw['inbound_rules'] if r['protocol'] != 'tcp'] + [
+        {'protocol': 'tcp', 'ports': p, 'sources': {'addresses': list(src)}} for p in want_ports]
+    call('PUT', f'/firewalls/{fw_id}', {'name': fw['name'], 'inbound_rules': rebuilt,
+                                        'outbound_rules': fw['outbound_rules'],
+                                        'droplet_ids': fw['droplet_ids'], 'tags': fw.get('tags', [])})
+    fw = call('GET', f'/firewalls/{fw_id}')['firewall']
 in_ports = sorted(r['ports'] for r in fw['inbound_rules'] if r['protocol'] == 'tcp')
-assert in_ports == ['22', '80'], in_ports
+assert in_ports == sorted(want_ports), in_ports
 srcs = {r['ports']: r['sources'].get('addresses') for r in fw['inbound_rules'] if r['protocol'] == 'tcp'}
-for p in ('22', '80'):
-    assert srcs[p] == [os.environ['EGRES_EXPECT'] + '/32'], (p, srcs[p])
+for p in want_ports:
+    assert srcs[p] == src, (p, srcs[p])
 assert len(fw['outbound_rules']) == 6, fw['outbound_rules']
-print("fw OK: droplet attached, inbound tcp", in_ports, "outbound", len(fw['outbound_rules']), "rules")
+print("fw OK: droplet attached, inbound tcp", in_ports, "src=egress 单源, outbound", len(fw['outbound_rules']), "rules")
 EOF
 log "挂 fw 后复核：API(:80) 与 ssh(22) 双通"
 curl -sS -m 10 "http://$nms_ip_from_json/api/v1/health" | grep -q '"status":"ok"' || gate S2 FAIL "fw 挂后 :80 不通"

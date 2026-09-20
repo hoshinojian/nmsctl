@@ -69,6 +69,9 @@ fi
 NMS_ID=$(python3 -c "import json;print(json.load(open('evidence/s2/nms.json'))['id'])")
 nms_ip_from_json=$(python3 -c "import json;print(json.load(open('evidence/s2/nms.json'))['ip'])")
 echo "$nms_ip_from_json" > "$NMS_IP_FILE"
+# stunnel443 形态：新机 IP 落盘即刷新 ~/.ssh/config 托管块——Round 协议每轮拆旧建新换 IP，
+# 仅靠 env.sh source 期刷新会滞后一轮（attempt2/3 实录两次 sshd 等待窗空烧）。
+declare -F nms_ssh_cfg_update >/dev/null && nms_ssh_cfg_update
 log "等待 sshd(22) 就绪"
 ok=""
 for i in $(seq 1 80); do

@@ -10,6 +10,9 @@
   5. links 全物化：每个挂接节点恰一条入边且 source==parent，links 数 == 挂接节点数。
      注意 API 语义：links[] 只物化深度≥2 的边（28 台实证 links=25=tree.nodes，第一跳→root
      的边不在 links[]），故 64 台期望 55 条而非算术满树的 63 条——计划文中「63 条」为 N-1 口径。
+     R+L 演练主几何（79 台/FH=2/出度 2，票 0-4 重推导）：links 期望 77=N-FH；挂接容量
+     FH*Σ budget^i（深度≤6）=2*(2+4+8+16+32)=124≥77，最小可行深度 6（与规划「实深 6」互证）；
+     深度≤5 容量 60<77 不可行——s5 预检按此拦截门限与几何矛盾。
 
 用法: g5-tree.py <topology.json> <out-analysis.json> --nodes 64 --first-hop 9 --child-budget 3 [--max-depth 4]
 """

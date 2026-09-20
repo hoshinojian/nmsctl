@@ -209,10 +209,28 @@ NOCAND="${NOCAND:-0}"
 [ "$NOCAND" = "0" ] || gate S5 FAIL "journal 出现「无可用备选父」签名 $NOCAND 次（T2 生效判据被触发）——按新缺陷处置，签名样本已落盘 evidence/s5/nocandidate-signature.txt"
 log "签名计数 $NOCAND（0=通过）"
 
-# G5' 深度门限按形态传参（自愈收口计划 C 项）：fresh 维持缺省 4；resume 传 7——锚定 discover
-# engine 的 max_depth 配置键缺省值（engine.go 可配；2026-09-12 满配额实机救援轮曾见深度 5、fleet 实质健康）。
-G5_MAX_DEPTH=4
-if [ "$FORM" = "resume" ]; then G5_MAX_DEPTH=7; fi
+# G5' 深度门限（票 0-4 参数化，R+L 演练规划 §4-4）：G5_MAX_DEPTH env 覆盖 > 形态缺省
+# （fresh 4 / resume 7——缺省锚定 discover engine 的 max_depth 配置键；2026-09-12 满配额
+# 实机救援轮曾见深度 5、fleet 实质健康）。演练主几何 79 台/FH=2/出度 2 的构成式最小
+# 可行深度=6（挂接容量 FH*Σ budget^i = 2*(2+4+8+16+32)=124 ≥ 77），env.local 显式注入
+# G5_MAX_DEPTH=6；缺省 4 与该几何矛盾，由下方可行性预检拦截（门限<最小可行即 FAIL）。
+G5_FORM_DEFAULT=4
+if [ "$FORM" = "resume" ]; then G5_FORM_DEFAULT=7; fi
+G5_MAX_DEPTH="${G5_MAX_DEPTH:-$G5_FORM_DEFAULT}"
+read -r MIN_FEASIBLE CAP_AT_GATE <<< "$(python3 - "$NODE_COUNT" "$FIRST_HOP_COUNT" "$CHILD_BUDGET" "$G5_MAX_DEPTH" <<'EOF'
+import sys
+n, fh, b, gate = map(int, sys.argv[1:5])
+need, cap, d = n - fh, 0, 1
+while cap < need and d < 64:
+    d += 1
+    cap += fh * b ** (d - 1)
+print(d, sum(fh * b ** i for i in range(1, gate)))
+EOF
+)"
+log "G5' 构成式重推导：N=$NODE_COUNT/FH=$FIRST_HOP_COUNT/出度=$CHILD_BUDGET → 最小可行深度 $MIN_FEASIBLE；门限 $G5_MAX_DEPTH（形态缺省 $G5_FORM_DEFAULT，env 可覆盖）下挂接容量 $CAP_AT_GATE ≥ 需挂接 $((NODE_COUNT - FIRST_HOP_COUNT))；links 期望 $((NODE_COUNT - FIRST_HOP_COUNT)) 条（=N-FH，API 只物化深度≥2 边，g5 docstring 口径）"
+if [ "$G5_MAX_DEPTH" -lt "$MIN_FEASIBLE" ]; then
+  gate S5 FAIL "G5' 深度门限 $G5_MAX_DEPTH < 构成式最小可行深度 $MIN_FEASIBLE（N=$NODE_COUNT/FH=$FIRST_HOP_COUNT/出度=$CHILD_BUDGET 挂接容量不足）——门限与几何矛盾：核对 env G5_MAX_DEPTH 与 BENCH_EXTRA_CONFIG 树参数"
+fi
 log "G5' 断言：树形不变量（全 $NODE_COUNT managed、出度≤$CHILD_BUDGET、深度≤$G5_MAX_DEPTH、links 全物化、第一跳=$FIRST_HOP_COUNT）"
 api GET /topology > "$EVIDENCE/s5/topology.json"
 python3 "$SOAK_HOME/observe/g5-tree.py" "$EVIDENCE/s5/topology.json" "$EVIDENCE/s5/tree-analysis.json" \

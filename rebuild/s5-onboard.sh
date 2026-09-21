@@ -159,7 +159,19 @@ fi
 
 log "G4' 断言（form=$FORM）：fresh=构成式上限（主轮1+F3重排1+late-join≤2+A重试≤2）∧ 无悬挂轮 ∧ 末轮 succeeded；resume=轮数只记录不断言（三值终态 ∧ 末轮 succeeded）；重排触发单列记录"
 export LATEJOIN_PASSES LATEJOIN_MAX   # G4' python 子进程读取（构成式联动）
+# ISS-019 复核改口径：G4' 采样竞态——轮可能在断言时刻仍在飞（10node a1 实录：round5 于采样后
+# 3.2s 正常终结 succeeded/8，被误判悬挂）。断言前对在飞轮给终态宽限窗（≤6×30s=3min，实录轮
+# 运行 7-134s），窗内轮询至全终态再判；超窗仍有 running 才判悬挂。
 api GET /agent-deploy > "$EVIDENCE/s5/agent-deploy-final.json"
+for _gw in 1 2 3 4 5 6; do
+  if python3 -c "
+import json, sys
+dep = json.load(open('evidence/s5/agent-deploy-final.json'))['items']
+sys.exit(0 if all(i.get('status') in ('succeeded','partial','failed') for i in dep) else 1)"; then break; fi
+  log "G4' 终态宽限：仍有在飞轮——30s 后重采（$_gw/6，ISS-019 采样竞态口径）"
+  sleep 30
+  api GET /agent-deploy > "$EVIDENCE/s5/agent-deploy-final.json"
+done
 api GET /nodes > "$EVIDENCE/s5/nodes-final.json"
 api GET "/alerts?status=active&limit=200" > "$EVIDENCE/s5/alerts-final.json"
 python3 - <<'EOF'

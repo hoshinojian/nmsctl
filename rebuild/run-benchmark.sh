@@ -47,8 +47,9 @@ bash "$SOAK_HOME/rebuild/s2-nms.sh";       T_S2=$(date -u +%FT%TZ)
 python3 "$SOAK_HOME/drill/env-verify.py" --refresh --require-live --no-fleet
 bash "$SOAK_HOME/rebuild/s3-nodes.sh";     T_S3=$(date -u +%FT%TZ)
 bash "$SOAK_HOME/rebuild/s4-import.sh";    T_S4=$(date -u +%FT%TZ)
-# 环境↔代码对账门·第二道（s4 后，全量）：台数/domain0 与 env 配位——开键前最后核对。
-python3 "$SOAK_HOME/drill/env-verify.py" --require-live
+# 环境↔代码对账门·第二道（s4 后，全量，重采快照——Round2 attempt2 实录：漏 refresh
+# 读了 s2 时点的旧快照，79 台已入池却报 0/79）：台数/domain0 与 env 配位，开键前最后核对。
+python3 "$SOAK_HOME/drill/env-verify.py" --refresh --require-live
 bash "$SOAK_HOME/rebuild/s5-onboard.sh";   T_S5=$(date -u +%FT%TZ)   # 头条：开键→$NODE_COUNT/$NODE_COUNT 零介入
 bash "$SOAK_HOME/rebuild/s6-verify.sh";    T_S6=$(date -u +%FT%TZ)
 

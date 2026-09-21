@@ -140,10 +140,10 @@ accept = 443
 connect = 127.0.0.1:__SSHD_PORT__
 STCONF
 systemctl restart stunnel4 || stunnel4 /etc/stunnel/ssh-443.conf
-# (v3.4 leak seal #2/#3: 18081 now binds loopback only — the log is reachable via
-#  ssh (break-glass leg), never from the internet; plus a defensive scrub of any
-#  secret-looking residue before we declare bootstrap done.)
-sed -i -E 's/(PrivateKey *= *)[A-Za-z0-9+/]{43}=/\1<redacted>/g' /var/log/bootstrap.log 2>/dev/null || true
+# (v3.4 leak seal #2: 18081 binds loopback only and serves /var/log/soak — bootstrap.log
+#  is not in that tree and secrets never echo (quoted heredocs + chpasswd no-x), so the
+#  ISS-008 defensive scrub was removed: sed -i swaps the log inode while the exec redirect
+#  still points at the old one, orphaning every later line incl. the BOOTSTRAP-OK marker.)
 emit "BOOTSTRAP-OK"
 mkdir -p /var/log/soak
 (setsid python3 -m http.server 18081 --directory /var/log/soak --bind 127.0.0.1 >/dev/null 2>&1 &)

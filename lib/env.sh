@@ -92,7 +92,9 @@ nms_ip() {
 # 出口漂移无关紧要（WG roaming/无白名单），探测只服务通道选择不再覆盖任何白名单。
 export NMS_SSH_VIA="${NMS_SSH_VIA:-direct}"
 # env.local 键的导出面（ISS-003 同款缺口实录）：凡"子进程脚本要读"的运行时键必须在此显式导出
-#（BENCH_EXTRA_CONFIG 由 run-benchmark 自行导出）。SSHD_PORT 已在非机密缺省区导出。
+#（ISS-018：BENCH_EXTRA_CONFIG 改为在此显式导出——「由 run-benchmark 自行导出」在阶梯
+#  裸跑 s2 语境是缺口：child_budget 落硬编码 3 与演练意图 2 分裂，10 台档 G5 实录）。SSHD_PORT 已在非机密缺省区导出。
+export BENCH_EXTRA_CONFIG="${BENCH_EXTRA_CONFIG:-}"
 export DRILL_EGRES_AUTO="${DRILL_EGRES_AUTO:-0}"   # 保留键（net-probe 记录用；白名单机制已退役不再覆盖断言）
 if [ "$NMS_SSH_VIA" = "auto" ]; then
   _np_out=$(bash "${SOAK_HOME}/lib/net-probe.sh" --eval 2>/dev/null || true)

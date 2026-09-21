@@ -1,8 +1,8 @@
 #!/bin/bash
 # S4 入池：vpsctl 导出载荷 → 后处理（剔 NMS/root/密码/domain/唯一性）→ POST /topology → G3
 # T3 必改（scale-coldstart-churn-plan §一 T3）：
-#   - domain 标注改显式清单：sgp1 批次内按名称排序取前 FIRST_HOP_COUNT(9) 台 domain0、其余 domain1
-#     （旧 region=='sgp1'→domain0 硬规则在新分布 sgp1 11=9+2 下会错标 2 台）；选取清单落盘 evidence 供审计；
+#   - domain 标注改显式清单：第一跳区域（FIRST_HOP_REGION，v3.4 票 5 参数化，缺省 sgp1）
+#     批次内按名称排序取前 FIRST_HOP_COUNT 台 domain0、其余 domain1；选取清单落盘 evidence 供审计；
 #   - 断言 domain0==9 / domain1==55、总数 64、区域计数与 s3 落盘分布表一致；28→64 参数化。
 set -euo pipefail
 SOAK_SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # 仓内定位：scripts/soak/rebuild
@@ -35,11 +35,15 @@ assert sum(dist.values()) == NC, f"分布表合计 {sum(dist.values())} != {NC}"
 regions = collections.Counter(n['region'] for n in nodes)
 assert dict(regions) == dist, f"区域计数 {dict(regions)} != 分布表 {dist}"
 
-# T3 必改：domain 显式清单——sgp1 批次内按名称排序取前 FH 台 domain0，其余全部 domain1
-sgp1_sorted = sorted((n for n in nodes if n['region'] == 'sgp1'), key=lambda n: n['name'])
-assert len(sgp1_sorted) >= FH, f"sgp1 只有 {len(sgp1_sorted)} 台，不足第一跳配额 {FH}"
-domain0_ids = {n['id'] for n in sgp1_sorted[:FH]}
-json.dump({"rule": f"sgp1 按名称排序前 {FH} 台 domain0，其余 domain1",
+# T3 必改：domain 显式清单——第一跳区域（FIRST_HOP_REGION，v3.4 票 5 参数化——原硬编码
+# 'sgp1'；档位几何首跳区可换，缺省 sgp1 保持 79 台主几何口径）批次内按名称排序取前 FH 台
+# domain0，其余全部 domain1
+fh_region = os.environ.get('FIRST_HOP_REGION', 'sgp1')
+assert fh_region.replace('-', '').replace('_', '').isalnum(), f'FIRST_HOP_REGION 非法: {fh_region!r}'
+fh_sorted = sorted((n for n in nodes if n['region'] == fh_region), key=lambda n: n['name'])
+assert len(fh_sorted) >= FH, f"{fh_region} 只有 {len(fh_sorted)} 台，不足第一跳配额 {FH}"
+domain0_ids = {n['id'] for n in fh_sorted[:FH]}
+json.dump({"rule": f"{fh_region} 按名称排序前 {FH} 台 domain0，其余 domain1",
            "domain0": sorted(domain0_ids)},
           open('evidence/s4/domain0-selection.json', 'w'), ensure_ascii=False, indent=1)
 
@@ -109,4 +113,12 @@ if fresh:
 else:
     print(f"G3 OK (resume): payload {NC} 台入库齐全 ∧ domain 对齐审计件；全集分布（记录不断言）: {dist}")
 EOF
-gate S4 PASS "$NODE_COUNT 台入池（D2 口径：payload id 集，状态无关）"
+# 凭据落库对账（v3.4 票 5：API 设计不回密码——04 契约密码不外显，故对账走 NMS 本机只读
+# psql：ssh_password 非空计数==NC；只读查询、无参数拼接，AGENTS「脚本 DB 只读」口径）
+log "凭据落库对账（psql 只读：nodes.ssh_password 非空计数 == $NODE_COUNT）"
+CRED_N=$(nms_ssh "docker exec nms-timescaledb psql -U nms -d nms -tAc \
+  \"SELECT count(*) FROM nodes WHERE ssh_password IS NOT NULL AND ssh_password <> ''\"")
+[ "$CRED_N" = "$NODE_COUNT" ] || gate S4 FAIL "凭据落库 $CRED_N != $NODE_COUNT（导入载荷密码段丢失？）"
+log "凭据落库 $CRED_N/$NODE_COUNT ✓"
+
+gate S4 PASS "$NODE_COUNT 台入池（D2 口径：payload id 集，状态无关）+凭据落库对账"

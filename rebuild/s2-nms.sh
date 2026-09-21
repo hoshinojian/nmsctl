@@ -175,18 +175,21 @@ if os.environ.get('BENCH_EXTRA_CONFIG'):
     d.update(json.loads('{' + os.environ['BENCH_EXTRA_CONFIG'] + '}'))
 print(json.dumps(d))")
 api PUT /config "$CONF" > "$EVIDENCE/s2/config-put.json"
+api GET /config > "$EVIDENCE/s2/config-get.json"
 python3 - <<'EOF'
-import json
-d = {i['key']: i['value'] for i in json.load(open('evidence/s2/config-put.json'))['items']}
-import os
+import json, os
 want = {"child_budget": 3, "deploy_concurrency": int(os.environ.get("DEPLOY_CONCURRENCY", "12")), "discover_concurrency": 16, "handshake_pace": 100, "resweep_interval": 60,
         "dial_timeout_ms": 20000}
 if os.environ.get("BENCH_EXTRA_CONFIG"):
     import json as _j
     want.update(_j.loads("{" + os.environ["BENCH_EXTRA_CONFIG"] + "}"))
-for k, v in want.items():
-    assert d.get(k) == v, (k, d.get(k), v)
-print("config OK:", want)
+# 实效对账（ISS-003 教训，2026-09-21 用户口径：「判断当前环境和代码上的环境配不配得上」）：
+# 对 GET 回读断言而非 PUT 回显——回显只证明"我们发了什么"，不证明"系统收下了什么"
+# （attempt3 实录：BENCH 未传到子进程时 PUT 悟空、GET 全注册表缺省，回显断言照样绿）。
+got = {i['key']: i['value'] for i in json.load(open('evidence/s2/config-get.json'))['items']}
+bad = {k: {"got": got.get(k), "want": v} for k, v in want.items() if got.get(k) != v}
+assert not bad, f"配置实效不符（GET≠want）: {bad}"
+print("config OK（GET 实效对账）:", want)
 EOF
 git -C "$NMS2_REPO" describe --tags --always > "$EVIDENCE/expected-agent-version.txt"
 log "期望 agent 版本：$(cat "$EVIDENCE/expected-agent-version.txt")"

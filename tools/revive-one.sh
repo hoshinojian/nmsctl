@@ -9,7 +9,7 @@ ID="${1:?用法: revive-one.sh <node_name> <payload.json>}"
 PAYLOAD_SRC="${2:?缺 payload 源}"
 # heal 场景进场检查：目标缺席 + 其余 63 台健康（不能要求满员——缺的那台正是要复活的）
 NMS_IP=$(cat "$NMS_IP_FILE")
-curl -sS -m 10 "http://$NMS_IP/api/v1/nodes" | python3 -c "
+curl -sS -m 10 "http://$NMS_API_ADDR/api/v1/nodes" | python3 -c "
 import json, sys
 items = json.load(sys.stdin).get('items', [])
 ok = sum(1 for n in items if n['role']=='managed' and n['status']=='online' and n['collection_state']=='collection_ok')

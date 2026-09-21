@@ -19,7 +19,11 @@ export DEBIAN_FRONTEND=noninteractive
 mkdir -p /var/log/soak /opt/nms/agents /opt/nms/backups /root/.ssh
 chmod 700 /root/.ssh
 echo '__AUTHORIZED_KEY__' > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+# (v3.4 bootstrap-log leak seal #1: chpasswd under xtrace echoes the plaintext password
+#  into the log that 18081 used to serve publicly — no-x the sensitive span.)
+set +x
 echo 'root:__NODE_PASS__' | chpasswd
+set -x
 # v3.4 high-port sshd (zero-firewall baseline): Ubuntu 24.04 ships ssh.socket
 # (socket activation) which ignores Port in sshd_config (P7) — disable socket
 # activation, run ssh.service directly, then bind the drill port.
@@ -36,7 +40,7 @@ SSHEOF
 systemctl restart ssh.service || systemctl restart sshd
 emit "STAGE=apt"
 timeout 300 apt-get update -y
-timeout 600 apt-get install -y docker.io docker-compose-v2 stunnel4 python3
+timeout 600 apt-get install -y docker.io docker-compose-v2 stunnel4 python3 wireguard-tools
 systemctl enable --now docker
 cat > /opt/nms/docker-compose.yml <<'COMPOSEEOF'
 # PG+TimescaleDB, same as local dev (nms-deploy 6.1 plan A).
@@ -73,18 +77,39 @@ sleep 10
 docker exec nms-timescaledb pg_isready -U nms || true
 cat > /opt/nms/.env <<'ENVEOF'
 PG_DSN=postgres://nms:nms@localhost:5432/nms?sslmode=disable
-HTTP_ADDR=:80
+# v3.4: :80 binds the WG tunnel address ONLY (single-listener product, user-ratified).
+# Public :80 is gone from the root; NMS-local consumers curl 10.100.0.1:80 too.
+HTTP_ADDR=10.100.0.1:80
 AGENT_PATH=/opt/nms/agents/nms-agent-linux
 ENVEOF
+emit "STAGE=wireguard"
+# WG overlay (v3.4): single edge orchestrator<->NMS. Keys arrive via user-data
+# placeholders (quoted heredoc body: never echoed by xtrace into bootstrap.log).
+mkdir -p /etc/wireguard
+cat > /etc/wireguard/wg0.conf <<'WGEOF'
+[Interface]
+Address = 10.100.0.1/24
+ListenPort = 51820
+MTU = 1420
+PrivateKey = __WG_PRIV__
+[Peer]
+PublicKey = __WG_PEER_PUB__
+AllowedIPs = 10.100.0.2/32
+WGEOF
+chmod 600 /etc/wireguard/wg0.conf
+systemctl enable --now wg-quick@wg0
 emit "STAGE=unit"
 cat > /etc/systemd/system/nms.service <<'UNITEOF'
 # NMS server systemd unit (nms-deploy 5).
 # /etc/systemd/system/nms.service.
 # postgresql.service only relevant for plan B; plan A (Docker PG) relies on
 # NMS 60s PG-wait retry (#42) -- keeping this line is harmless, do not rely on it.
+# v3.4: nms binds 10.100.0.1:80 (wg0) — Require wg0 so it never starts into a
+# missing address (bind-fail crash loop).
 [Unit]
 Description=NMS (Network Management System)
-After=network.target postgresql.service
+Requires=wg-quick@wg0.service
+After=network.target wg-quick@wg0.service postgresql.service
 
 [Service]
 Type=simple
@@ -115,6 +140,10 @@ accept = 443
 connect = 127.0.0.1:__SSHD_PORT__
 STCONF
 systemctl restart stunnel4 || stunnel4 /etc/stunnel/ssh-443.conf
+# (v3.4 leak seal #2/#3: 18081 now binds loopback only — the log is reachable via
+#  ssh (break-glass leg), never from the internet; plus a defensive scrub of any
+#  secret-looking residue before we declare bootstrap done.)
+sed -i -E 's/(PrivateKey *= *)[A-Za-z0-9+/]{43}=/\1<redacted>/g' /var/log/bootstrap.log 2>/dev/null || true
 emit "BOOTSTRAP-OK"
 mkdir -p /var/log/soak
-(setsid python3 -m http.server 18081 --directory /var/log/soak --bind 0.0.0.0 >/dev/null 2>&1 &)
+(setsid python3 -m http.server 18081 --directory /var/log/soak --bind 127.0.0.1 >/dev/null 2>&1 &)

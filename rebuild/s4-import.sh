@@ -65,7 +65,7 @@ log "POST /topology（$NODE_COUNT 台入池，onboard 缺省 false）"
 log "导入前快照（D2：全集口径断言仅在 NMS 侧为空=全新导入时启用，续跑免挂）"
 api GET /nodes > "$EVIDENCE/s4/nodes-before-import.json"
 ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" \
-  "curl -sS -m 60 -X POST -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:80/api/v1/topology" \
+  "curl -sS -m 60 -X POST -H 'Content-Type: application/json' --data-binary @- http://$NMS_API_ADDR:80/api/v1/topology" \
   < "$EVIDENCE/s4/import-payload.json" > "$EVIDENCE/s4/import-resp.json"
 cat "$EVIDENCE/s4/import-resp.json"; echo
 python3 -c "

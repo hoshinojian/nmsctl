@@ -17,8 +17,12 @@ OUT = os.path.join(EV, 'witness.jsonl')
 def ip():
     return open(os.path.join(EV, 'nms-ip.txt')).read().strip()
 
+# v3.4 票 2：API 腿走 WG 隧道地址（80 单绑 10.100.0.1，公网 :80 不存在）；
+# NMS_API_ADDR 由 lib/env.sh 缺省导出，NO_PROXY 已含隧道网段（不进系统代理）。
+API = 'http://' + os.environ.get('NMS_API_ADDR', '10.100.0.1') + ':80'
+
 def get(path):
-    r = subprocess.run(['curl', '-sS', '-m', '10', f'http://{ip()}/api/v1{path}'],
+    r = subprocess.run(['curl', '-sS', '-m', '10', f'{API}/api/v1{path}'],
                        capture_output=True, text=True)
     return json.loads(r.stdout) if r.returncode == 0 and r.stdout.strip() else None
 

@@ -49,6 +49,14 @@ export EXPECT_HEAD="${EXPECT_HEAD:-2c31e89}"           # 被测 main；run-bench
 # 本文件全部 ssh/scp、inject 跳板、W-B iptables、s2-repair 等单源取此键；vpsctl 导出同传
 # （vpsctl#30 -ssh-port）。缺省 40222=与模板定版一致，防漏配回退 22。
 export SSHD_PORT="${SSHD_PORT:-40222}"
+# NMS API 基址（v3.4 票 2：80 单绑 WG 隧道地址——公网 :80 从根上不存在）。api()/witness/
+# s2 health/s5 等一切 API 腿统一走 $NMS_API_ADDR；退化形态（无 WG 版）把它切回 $(nms_ip)
+# 即可，全链零改动。NMS 本机（ssh-loopback 腿）同用 10.100.0.1——绑的就是这个地址。
+export NMS_API_ADDR="${NMS_API_ADDR:-10.100.0.1}"
+# 系统代理共存（用户环境常开）：隧道网段与 loopback 不得进代理——大小写双变量、与既有值合
+# 并而非覆盖（clobber 会把用户日常流量打穿隧道）。
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}10.100.0.0/24,127.0.0.1"
+export no_proxy="${no_proxy:+$no_proxy,}10.100.0.0/24,127.0.0.1"
 # T3 65 台参数化单一来源（scale-coldstart-churn-plan §一 T3，2026-09-11）：
 # 节点 64 + NMS 1 = 65；分布表本体（区域/账号/机型，账号列注入）在 env.local 的
 # SOAK_BATCHES（s3 消费），此处只放全局标量。改分布时：先改 SOAK_BATCHES，
@@ -129,9 +137,9 @@ api() {
   local ip; ip=$(nms_ip)
   if [ -n "$body" ]; then
     printf '%s' "$body" | ssh $SSHOPT -p "$SSHD_PORT" "root@$ip" \
-      "curl -sS -m 60 -X $method -H 'Content-Type: application/json' --data-binary @- http://127.0.0.1:80/api/v1$path"
+      "curl -sS -m 60 -X $method -H 'Content-Type: application/json' --data-binary @- http://$NMS_API_ADDR:80/api/v1$path"
   else
-    ssh $SSHOPT -p "$SSHD_PORT" "root@$ip" "curl -sS -m 60 http://127.0.0.1:80/api/v1$path"
+    ssh $SSHOPT -p "$SSHD_PORT" "root@$ip" "curl -sS -m 60 http://$NMS_API_ADDR:80/api/v1$path"
   fi
 }
 
@@ -155,8 +163,10 @@ gate() { # gate <Sx> PASS|FAIL <说明>
 
 # ---- D3 共用实例化链路（自 s2 内联片段抽取；s2/s3 共用）----
 # instantiate_user_data <模板路径> <输出路径>：__NODE_PASS__/__AUTHORIZED_KEY__/__SSHD_PORT__
-# 注入。仓内模板零凭据；实例化件落运行时目录（0600）不入库。密码同源：模板密码与 s4 载荷
-# ssh_password 同用 env NODE_PASS；端口同源：模板 Port 与全部脚本/vpsctl 导出同用 SSHD_PORT。
+# 注入（NMS 模板另含 __WG_PRIV__/__WG_PEER_PUB__——缺 NMS_WG_* env 即 ABORT）。
+# 仓内模板零凭据；实例化件落运行时目录（0600）不入库。密码同源：模板密码与 s4 载荷
+# ssh_password 同用 env NODE_PASS；端口同源：模板 Port 与全部脚本/vpsctl 导出同用 SSHD_PORT；
+# 密钥同源：s2 开头 wg genkey 落 evidence/s2/wg/（每轮重建即重生成、跨演练不复用）。
 instantiate_user_data() {
   python3 - "$1" "$2" <<'PYEOF'
 import os, sys
@@ -171,8 +181,20 @@ port = os.environ.get('SSHD_PORT', '40222')
 assert port.isdigit() and 1 <= int(port) <= 65535, f'SSHD_PORT 非法: {port!r}'
 ak = os.environ.get('AUTHORIZED_KEY', '').strip()
 assert ak and '__AUTHORIZED_KEY__' not in ak, 'AUTHORIZED_KEY 未设置（节点 root authorized_keys 注入用）'
-open(out_path, 'w').write(
-    tpl.replace('__NODE_PASS__', pw).replace('__AUTHORIZED_KEY__', ak).replace('__SSHD_PORT__', port))
+out = tpl.replace('__NODE_PASS__', pw).replace('__AUTHORIZED_KEY__', ak).replace('__SSHD_PORT__', port)
+# v3.4 票 2：WG 占位符（仅 NMS 模板携带；节点模板不含）。密钥经文件句柄传递
+#（NMS_WG_PRIV_FILE/NMS_WG_PEER_PUB_FILE——进程环境/命令行零私钥值，Mimosa 口径）。
+if '__WG_PRIV__' in tpl:
+    priv_path = os.environ.get('NMS_WG_PRIV_FILE', '').strip()
+    peer_path = os.environ.get('NMS_WG_PEER_PUB_FILE', '').strip()
+    assert priv_path and os.path.isfile(priv_path), 'NMS_WG_PRIV_FILE 未指向文件（s2 开头 wg genkey 产物）'
+    assert peer_path and os.path.isfile(peer_path), 'NMS_WG_PEER_PUB_FILE 未指向文件（编排机侧公钥）'
+    wg_priv = open(priv_path).read().strip()
+    wg_peer = open(peer_path).read().strip()
+    assert wg_priv and '__WG_PRIV__' not in wg_priv and wg_peer and '__WG_PEER_PUB__' not in wg_peer
+    out = out.replace('__WG_PRIV__', wg_priv).replace('__WG_PEER_PUB__', wg_peer)
+assert '__WG_' not in out and '__NODE_PASS__' not in out and '__SSHD_PORT__' not in out, '占位符替换不彻底'
+open(out_path, 'w').write(out)
 os.chmod(out_path, 0o600)
 PYEOF
 }

@@ -20,11 +20,17 @@ case "$STOP_AFTER" in create|ssh|full) ;; *) echo "ABORT: DRILL_S2_STOP_AFTER=$S
 if [ "$DRY_RUN" = "1" ]; then
   log "DRY：零网络——只跑本地断言（STOP_AFTER=$STOP_AFTER/ATTEMPT=$DRILL_ATTEMPT 仅记录）"
   mkdir -p "$EVIDENCE/s2"
-  instantiate_user_data "$SOAK_HOME/rebuild/nms-user-data6-ascii.sh" "$REBUILD_DIR/dry-nms-user-data.sh"
+  # 密钥经文件句柄传递（NMS_WG_PRIV_FILE/PEER_PUB_FILE）：进程环境/命令行零私钥值
+  WGTMP=$(mktemp -d)
+  wg genkey > "$WGTMP/nms.priv"; wg genkey > "$WGTMP/orch.priv"
+  wg pubkey < "$WGTMP/orch.priv" > "$WGTMP/orch.pub"
+  NMS_WG_PRIV_FILE="$WGTMP/nms.priv" NMS_WG_PEER_PUB_FILE="$WGTMP/orch.pub" \
+    instantiate_user_data "$SOAK_HOME/rebuild/nms-user-data6-ascii.sh" "$REBUILD_DIR/dry-nms-user-data.sh"
   instantiate_user_data "$SOAK_HOME/rebuild/node-user-data-ascii.sh" "$REBUILD_DIR/dry-node-user-data.sh"
   rm -f "$REBUILD_DIR/dry-nms-user-data.sh" "$REBUILD_DIR/dry-node-user-data.sh"
+  rm -rf "$WGTMP"
   bash "$SOAK_HOME/tools/port22-gate.sh"
-  log "DRY：模板实例化+端口门全过（s2 真网动作全部跳过）"
+  log "DRY：模板实例化（含 WG 占位符）+端口门全过（s2 真网动作全部跳过）"
   exit 0
 fi
 stage_verdict() { # stage_verdict <phase 1|2|3> <rung|null> <note>
@@ -45,7 +51,7 @@ PYEOF
     --runbook "$rb" --verdict PASS --commit "$(git -C "$NMS2_REPO" rev-parse --short HEAD)" \
     --evidence "evidence/s2/log.txt" --notes "$note" \
     --stage "{\"phase\":${ph},\"rung\":${rg_:-null},\"attempt\":${DRILL_ATTEMPT},\"form\":null}" \
-    --channel "{\"nms_ssh_via\":\"${NMS_SSH_VIA}\",\"wg_handshake\":null}"
+    --channel "{\"nms_ssh_via\":\"${NMS_SSH_VIA}\",\"wg_handshake\":${WG_HANDSHAKE_TS:-null}}"
 }
 
 check_egress
@@ -74,11 +80,25 @@ if [ -f "$EVIDENCE/s2/nms.json" ]; then
     [ "$_try" = "3" ] || sleep 10
   done
 fi
+# 复用但密钥缺失=远端 wg0.conf 配不回（握手必败）——降级重建（v3.4 票 2）
+if [ -n "$reuse_ok" ] && [ ! -f "$EVIDENCE/s2/wg/nms.priv" ]; then
+  log "复用机但 evidence/s2/wg 密钥缺失——降级重建"
+  reuse_ok=""
+fi
 if [ -n "$reuse_ok" ]; then
   log "续跑：复用已建 droplet $(python3 -c "import json;d=json.load(open('evidence/s2/nms.json'));print(d['name'],d['ip'],d['id'])")"
+  export NMS_WG_PRIV_FILE="$EVIDENCE/s2/wg/nms.priv" NMS_WG_PEER_PUB_FILE="$EVIDENCE/s2/wg/orch.pub"
 else
   [ -f "$EVIDENCE/s2/nms.json" ] && log "记录的 droplet 3 次探活全败——清记录重建"
   rm -f "$EVIDENCE/s2/nms.json"
+  log "生成 WG 密钥对（本轮专用、跨演练不复用；0600 落 evidence/s2/wg/ 不入库，经文件句柄传递零环境值）"
+  mkdir -p "$EVIDENCE/s2/wg" && chmod 700 "$EVIDENCE/s2/wg"
+  wg genkey > "$EVIDENCE/s2/wg/nms.priv"
+  wg genkey > "$EVIDENCE/s2/wg/orch.priv"
+  wg pubkey < "$EVIDENCE/s2/wg/nms.priv"  > "$EVIDENCE/s2/wg/nms.pub"
+  wg pubkey < "$EVIDENCE/s2/wg/orch.priv" > "$EVIDENCE/s2/wg/orch.pub"
+  chmod 600 "$EVIDENCE/s2/wg/"*.priv "$EVIDENCE/s2/wg/"*.pub
+  export NMS_WG_PRIV_FILE="$EVIDENCE/s2/wg/nms.priv" NMS_WG_PEER_PUB_FILE="$EVIDENCE/s2/wg/orch.pub"
 TMPACCT="$EVIDENCE/s2/accounts-nms.json"
 python3 - <<'EOF'
 import json, os
@@ -110,6 +130,15 @@ fi
 NMS_ID=$(python3 -c "import json;print(json.load(open('evidence/s2/nms.json'))['id'])")
 nms_ip_from_json=$(python3 -c "import json;print(json.load(open('evidence/s2/nms.json'))['ip'])")
 echo "$nms_ip_from_json" > "$NMS_IP_FILE"
+log "生成编排机侧 wg0.conf（10.100.0.2/32 → $nms_ip_from_json:51820，keepalive 25，MTU 1420）"
+{
+  printf '[Interface]\nAddress = 10.100.0.2/32\nMTU = 1420\nPrivateKey = '
+  cat "$EVIDENCE/s2/wg/orch.priv"
+  printf '\n[Peer]\nPublicKey = '
+  cat "$EVIDENCE/s2/wg/nms.pub"
+  printf '\nEndpoint = %s:51820\nAllowedIPs = 10.100.0.1/32\nPersistentKeepalive = 25\n' "$nms_ip_from_json"
+} > "$EVIDENCE/s2/wg/wg0-client.conf"
+chmod 600 "$EVIDENCE/s2/wg/wg0-client.conf"
 # stunnel443 形态：新机 IP 落盘即刷新 ~/.ssh/config 托管块——Round 协议每轮拆旧建新换 IP，
 # 仅靠 env.sh source 期刷新会滞后一轮（attempt2/3 实录两次 sshd 等待窗空烧）。
 declare -F nms_ssh_cfg_update >/dev/null && nms_ssh_cfg_update
@@ -138,8 +167,29 @@ printf 'nmsctl-scp-probe-%s\n' "$(date -u +%FT%TZ)" > "$EVIDENCE/s2/scp-probe.tx
 nms_scp "$EVIDENCE/s2/scp-probe.txt" "root@$nms_ip_from_json:/tmp/nmsctl-scp-probe" > /dev/null
 nms_ssh 'cat /tmp/nmsctl-scp-probe' | grep -q '^nmsctl-scp-probe-' || gate S2/SSH FAIL "scp 回读不一致"
 nms_ssh 'rm -f /tmp/nmsctl-scp-probe'
+log "WG 隧道置备（编排机侧 wg-quick 幂等重启 → 握手 → 隧道 ping → 公网 :80 负断言）"
+sudo wg-quick down "$EVIDENCE/s2/wg/wg0-client.conf" >/dev/null 2>&1 || true
+sudo wg-quick up "$EVIDENCE/s2/wg/wg0-client.conf" >/dev/null
+WG_HANDSHAKE_TS=null
+hs_ok=""
+for i in $(seq 1 24); do
+  _hs=$(sudo wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2}' | head -1)
+  if [ -n "$_hs" ] && [ "$_hs" -gt 0 ] 2>/dev/null; then
+    WG_HANDSHAKE_TS="$(date -u -d "@$_hs" +%FT%TZ)"; hs_ok=1; break
+  fi
+  sleep 5
+done
+if [ -z "$hs_ok" ]; then
+  sudo wg-quick down "$EVIDENCE/s2/wg/wg0-client.conf" >/dev/null 2>&1 || true
+  gate S2/SSH FAIL "WG 握手 2min 未成（UDP 51820/密钥/端点——对照 C0 结论与 evidence/s2/wg/）"
+fi
+ping -c 3 -W 2 10.100.0.1 >/dev/null 2>&1 || gate S2/SSH FAIL "隧道 ping 10.100.0.1 不通（握手成而包不通=路由/MTU）"
+if curl -sS -m 5 "http://$nms_ip_from_json/api/v1/health" >/dev/null 2>&1; then
+  gate S2/SSH FAIL "公网 :80 意外可达（v3.4 应只在隧道 10.100.0.1 上）"
+fi
+log "WG 握手 $WG_HANDSHAKE_TS；隧道 ping 通；公网 :80 不可达 ✓（隧道 :80 正向断言随 STOP_AFTER=full 的 health+票 3 env-verify）"
 if [ "$STOP_AFTER" = "ssh" ]; then
-  stage_verdict 2 null "高位口 ssh/scp 通（通道=$NMS_SSH_VIA；WG 握手判据随票 2 在此插桩）"
+  stage_verdict 2 null "高位口 ssh/scp 通+WG 握手+隧道 ping+公网 :80 拒（通道=$NMS_SSH_VIA）"
   gate S2/SSH PASS "阶段 2 判据达成（STOP_AFTER=ssh）"
   exit 0
 fi
@@ -171,15 +221,15 @@ done
 [ -n "$ok" ] || gate S2 FAIL "PG 容器 15min 未就绪（查 /var/log/bootstrap.log）"
 log "PG 就绪；等自举完成标记（BOOTSTRAP-OK = unit 文件/stunnel 全就位，P75 教训）"
 ssh $SSHOPT -p "$SSHD_PORT" "root@$nms_ip_from_json" 'for i in $(seq 1 60); do grep -q BOOTSTRAP-OK /var/log/bootstrap.log 2>/dev/null && exit 0; sleep 5; done; echo MARKER-TIMEOUT; exit 1'
-log "重启 nms 服务并轮询 /health"
+log "重启 nms 服务并轮询 /health（API 腿=隧道 $NMS_API_ADDR）"
 ssh $SSHOPT -p "$SSHD_PORT" "root@$nms_ip_from_json" 'systemctl restart nms'
 ok=""
 for i in $(seq 1 60); do
-  if curl -sS -m 8 "http://$nms_ip_from_json/api/v1/health" 2>/dev/null | grep -q '"status":"ok"'; then ok=1; break; fi
+  if curl -sS -m 8 "http://$NMS_API_ADDR/api/v1/health" 2>/dev/null | grep -q '"status":"ok"'; then ok=1; break; fi
   sleep 5
 done
-[ -n "$ok" ] || gate S2 FAIL "health 5min 未就绪"
-curl -sS "http://$nms_ip_from_json/api/v1/health" | tee "$EVIDENCE/s2/health.json"; echo
+[ -n "$ok" ] || gate S2 FAIL "health 5min 未就绪（隧道 $NMS_API_ADDR——先核 WG 握手）"
+curl -sS "http://$NMS_API_ADDR/api/v1/health" | tee "$EVIDENCE/s2/health.json"; echo
 
 #（v3.3 零防火墙口径：原 P71「防火墙收口+塑形断言」段整体删除——出口白名单/
 #  FW_SOAK_NMS/DRILL_FW_EXTRA_SOURCES 机制退役，Round 1 遗留云 fw 资源随盘点清理，

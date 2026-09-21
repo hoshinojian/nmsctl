@@ -42,6 +42,7 @@ sys.path.insert(0, str(HERE.parent / "observe"))
 import verdict as verdict_mod  # noqa: E402  复用八字段哈希（与 verdict.py 同仓同构）
 
 WRAPPER = str(HERE / "nms-ssh.sh")  # ssh 包装（IP 读取+校验在包装内；DRILL_EVIDENCE_ROOT）
+API_BASE = os.environ.get("NMS_API_ADDR", "10.100.0.1") + ":80"  # v3.4：API 腿=WG 隧道地址（80 单绑）
 QUERIES = {  # 全只读；role/orphaned 在 nodes、status/collection_state 在 node_latest_state（Round1 轮末闸实录：nodes 表无此二列）；:lag/:lockwait/:since 经头部 \set 绑定（:'var' 字面量转义）
     "nodes_distribution": ("SELECT n.role,nls.status,nls.collection_state,count(*) FROM nodes n "
                            "JOIN node_latest_state nls ON nls.node_id=n.id "
@@ -172,7 +173,7 @@ def main():
         alerts = json.loads(fx.read_text())
     else:
         cp = subprocess.run(["bash", WRAPPER, "curl", "-sS", "-m", "30",
-                             "http://127.0.0.1:80/api/v1/alerts?status=active&limit=200"],
+                             f"http://{API_BASE}/api/v1/alerts?status=active&limit=200"],
                             capture_output=True, text=True)
         alerts = json.loads(cp.stdout)
     n_active = int(alerts.get("total", len(alerts.get("items", []))))
@@ -188,7 +189,7 @@ def main():
             items = json.loads(fx.read_text()).get("items", [])
         else:
             cp = subprocess.run(["bash", WRAPPER, "curl", "-sS", "-m", "30",
-                                 "http://127.0.0.1:80/api/v1/nodes"], capture_output=True, text=True)
+                                 f"http://{API_BASE}/api/v1/nodes"], capture_output=True, text=True)
             items = json.loads(cp.stdout).get("items", [])
         dist = {}
         for n in items:

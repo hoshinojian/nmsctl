@@ -111,11 +111,11 @@ cat > /tmp/r2-burst.sh <<'BURST'
 # phase F：逐台翻 false（串行快）；phase T：窗内并行翻 true（s5 同款）
 for id in "$@"; do
   curl -sS -m 30 -o /dev/null -X PUT -H 'Content-Type: application/json' \
-    -d '{"onboard":false}' http://127.0.0.1:80/api/v1/nodes/$id
+    -d '{"onboard":false}' http://10.100.0.1:80/api/v1/nodes/$id
 done
 for id in "$@"; do
   ( code=$(curl -sS -m 30 -o /tmp/r2-put-$id.json -w "%{http_code}" -X PUT -H 'Content-Type: application/json' \
-      -d '{"onboard":true}' http://127.0.0.1:80/api/v1/nodes/$id)
+      -d '{"onboard":true}' http://10.100.0.1:80/api/v1/nodes/$id)
     echo "$code $id" >> /tmp/r2-codes.txt ) &
 done
 wait

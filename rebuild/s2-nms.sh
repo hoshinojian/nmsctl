@@ -263,5 +263,9 @@ print("config OK（GET 实效对账）:", want)
 EOF
 git -C "$NMS2_REPO" describe --tags --always > "$EVIDENCE/expected-agent-version.txt"
 log "期望 agent 版本：$(cat "$EVIDENCE/expected-agent-version.txt")"
-stage_verdict 3 null "health ok+迁移版本最新+四键 GET 实效对账（零防火墙）"
+# 票 7：阶梯出口接健康闸（wave 级）——防「阶梯绿但正式轮轮末闸必红」断层；结果入 verdict（票 0-9 语义）
+python3 "$SOAK_HOME/drill/health-gate.py" --level wave --expect-converged \
+  --evidence-root "$SOAK_ENV" --commit "$(git -C "$NMS2_REPO" rev-parse --short HEAD)" \
+  --notes "s2 STOP_AFTER=full 阶段 3 出口" || gate S2 FAIL "健康闸（wave）红——阶梯出口不绿"
+stage_verdict 3 null "health ok+迁移版本最新+四键 GET 实效对账+健康闸 wave 绿（零防火墙）"
 gate S2 PASS "NMS=$nms_ip_from_json 健康（sshd:$SSHD_PORT）、零防火墙、配置就位"

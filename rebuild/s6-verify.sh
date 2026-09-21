@@ -70,4 +70,8 @@ log "dump $SIZE 字节，TOC $TOC_N 行，可恢复"
 log "journal 尾部快照（volatile，落盘证据）"
 nms_ssh 'journalctl -u nms --no-pager | tail -300' > "$EVIDENCE/s6/nms-journal-tail.log" || true
 nms_ssh 'journalctl --no-pager | grep -iE "discover|provision" | tail -200' > "$EVIDENCE/s6/discover-provision-log.log" || true
+# 票 7：阶段 5 出口接健康闸（wave 级，期望已收敛）——阶梯绿=判据+闸双绿
+python3 "$SOAK_HOME/drill/health-gate.py" --level wave --expect-converged \
+  --evidence-root "$SOAK_ENV" --commit "$(git -C "$NMS2_REPO" rev-parse --short HEAD)" \
+  --notes "s6 末=阶段 5 出口" || gate S6 FAIL "健康闸（wave）红——阶段 5 出口不绿"
 gate S6 PASS "上下行双向通 + 基线备份可恢复 —— PHASE-1 COMPLETE"

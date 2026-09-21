@@ -138,10 +138,13 @@ if int(droplet) not in fw['droplet_ids']:
     fw = call('GET', f'/firewalls/{fw_id}')['firewall']
 assert int(droplet) in fw['droplet_ids'], fw['droplet_ids']
 # 期望面（P71 单源纪律 + stunnel443 形态）：direct={22,80}；stunnel443={22,443,80}（TUN 截
-# 直连 22 的管理通道，Round1 实录）。先塑形（补缺端口/收敛单源=当前出口）再强断言——
-# 塑形幂等，手工预改过防火墙也不炸（此前 Step0 预加 443+双源曾把严格相等断言打红）。
+# 直连 22 的管理通道，Round1 实录）。先塑形（补缺端口/收敛源=当前出口∪附加稳定源）再强
+# 断言——塑形幂等，手工预改过防火墙也不炸（此前 Step0 预加 443+双源曾把严格相等断言打红）。
+# ISS-005：编排机出口当日三翻（101→203→101），单源收敛把回切态锁门外半场——DRILL_FW_EXTRA_SOURCES
+# 提供附加稳定源（逗号分隔裸 IP），塑形后白名单=当前出口∪附加源，防第四次翻转锁死。
 want_ports = ['22', '80'] + (['443'] if os.environ.get('NMS_SSH_VIA') == 'stunnel443' else [])
-src = [os.environ['EGRES_EXPECT'] + '/32']
+_extra = [x.strip() + '/32' for x in os.environ.get('DRILL_FW_EXTRA_SOURCES', '').split(',') if x.strip()]
+src = sorted({os.environ['EGRES_EXPECT'] + '/32'} | set(_extra))
 have_tcp = {r['ports']: r['sources'].get('addresses') for r in fw['inbound_rules'] if r['protocol'] == 'tcp'}
 if sorted(have_tcp) != sorted(want_ports) or any(have_tcp.get(p) != src for p in want_ports):
     rebuilt = [r for r in fw['inbound_rules'] if r['protocol'] != 'tcp'] + [

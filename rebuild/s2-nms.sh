@@ -9,6 +9,45 @@ cd "$REBUILD_DIR"
 mkdir -p "$EVIDENCE/s2"
 exec > >(tee "$EVIDENCE/s2/log.txt") 2>&1
 
+# ---- 票 1-B：检查点分段 + DRY（v3.4）----
+# DRILL_S2_STOP_AFTER=create（阶段 1 判据：droplet active+网络活）| ssh（阶段 2：高位口
+# ssh/scp 通；WG 握手随票 2 在此插桩）| full（缺省：全程含 bin/health/四键）。
+# DRILL_ATTEMPT=ladder attempt 序号（连续绿计数依据，默认 1）；DRY_RUN=1 零网络只跑本地断言。
+STOP_AFTER="${DRILL_S2_STOP_AFTER:-full}"
+DRY_RUN="${DRY_RUN:-0}"
+DRILL_ATTEMPT="${DRILL_ATTEMPT:-1}"
+case "$STOP_AFTER" in create|ssh|full) ;; *) echo "ABORT: DRILL_S2_STOP_AFTER=$STOP_AFTER 非法（create|ssh|full）" >&2; exit 1;; esac
+if [ "$DRY_RUN" = "1" ]; then
+  log "DRY：零网络——只跑本地断言（STOP_AFTER=$STOP_AFTER/ATTEMPT=$DRILL_ATTEMPT 仅记录）"
+  mkdir -p "$EVIDENCE/s2"
+  instantiate_user_data "$SOAK_HOME/rebuild/nms-user-data6-ascii.sh" "$REBUILD_DIR/dry-nms-user-data.sh"
+  instantiate_user_data "$SOAK_HOME/rebuild/node-user-data-ascii.sh" "$REBUILD_DIR/dry-node-user-data.sh"
+  rm -f "$REBUILD_DIR/dry-nms-user-data.sh" "$REBUILD_DIR/dry-node-user-data.sh"
+  bash "$SOAK_HOME/tools/port22-gate.sh"
+  log "DRY：模板实例化+端口门全过（s2 真网动作全部跳过）"
+  exit 0
+fi
+stage_verdict() { # stage_verdict <phase 1|2|3> <rung|null> <note>
+  local ph=$1 rg_=$2 note=$3
+  mkdir -p "$SOAK_ENV/verdicts" "$EVIDENCE/s2"
+  local rb="$EVIDENCE/s2/stage-runbook-p$ph-a$DRILL_ATTEMPT.json"
+  python3 - "$rb" "$ph" "$STOP_AFTER" "$note" <<'PYEOF'
+import json, sys
+ph, stop, note = sys.argv[2], sys.argv[3], sys.argv[4]
+fields = {"inject": f"DRILL_S2_STOP_AFTER={stop}", "proof_before": "evidence/s2/log.txt 全程",
+          "proof_effective": note, "exercise": f"阶段 {ph} 判据", "observe": "s2 log.txt",
+          "recover": "attempt 收尾按阶梯口径拆净（s1/s1.5）", "proof_after": "verdict 本行",
+          "cleanup": "同 recover"}
+json.dump(fields, open(sys.argv[1], "w"), ensure_ascii=False)
+PYEOF
+  python3 "$SOAK_HOME/observe/verdict.py" write "$SOAK_ENV/verdicts/ladder.jsonl" \
+    --carrier "阶梯点亮（非矩阵）" --scenario "stage${ph}-${STOP_AFTER}-attempt${DRILL_ATTEMPT}" \
+    --runbook "$rb" --verdict PASS --commit "$(git -C "$NMS2_REPO" rev-parse --short HEAD)" \
+    --evidence "evidence/s2/log.txt" --notes "$note" \
+    --stage "{\"phase\":${ph},\"rung\":${rg_:-null},\"attempt\":${DRILL_ATTEMPT},\"form\":null}" \
+    --channel "{\"nms_ssh_via\":\"${NMS_SSH_VIA}\",\"wg_handshake\":null}"
+}
+
 check_egress
 [ -f "$EVIDENCE/s1/post-inventory.json" ] || { echo "ABORT: S1 未执行" >&2; exit 1; }
 
@@ -74,6 +113,19 @@ echo "$nms_ip_from_json" > "$NMS_IP_FILE"
 # stunnel443 形态：新机 IP 落盘即刷新 ~/.ssh/config 托管块——Round 协议每轮拆旧建新换 IP，
 # 仅靠 env.sh source 期刷新会滞后一轮（attempt2/3 实录两次 sshd 等待窗空烧）。
 declare -F nms_ssh_cfg_update >/dev/null && nms_ssh_cfg_update
+log "出生网络探针（TCP $SSHD_PORT socket 级，无需凭据；30×10s 窗——首机 user-data 需 1-2min）"
+ok=""
+for i in $(seq 1 30); do
+  python3 -c "import socket,sys; socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=8).close()" \
+    "$nms_ip_from_json" "$SSHD_PORT" 2>/dev/null && { ok=1; break; }
+  sleep 10
+done
+[ -n "$ok" ] || gate S2/CREATE FAIL "出生网络 5min 未活（TCP $SSHD_PORT 全败——查 DO 控制台/console）"
+if [ "$STOP_AFTER" = "create" ]; then
+  stage_verdict 1 null "droplet active 且网络活（TCP $SSHD_PORT）"
+  gate S2/CREATE PASS "阶段 1 判据达成（STOP_AFTER=create；attempt 收尾按阶梯口径拆净）"
+  exit 0
+fi
 log "等待 sshd($SSHD_PORT) 就绪"
 ok=""
 for i in $(seq 1 80); do
@@ -81,6 +133,16 @@ for i in $(seq 1 80); do
   sleep 15
 done
 [ -n "$ok" ] || gate S2 FAIL "sshd 20min 未就绪"
+log "scp 冒烟（阶段 2 判据：scp 通——推/回读/清理三步）"
+printf 'nmsctl-scp-probe-%s\n' "$(date -u +%FT%TZ)" > "$EVIDENCE/s2/scp-probe.txt"
+nms_scp "$EVIDENCE/s2/scp-probe.txt" "root@$nms_ip_from_json:/tmp/nmsctl-scp-probe" > /dev/null
+nms_ssh 'cat /tmp/nmsctl-scp-probe' | grep -q '^nmsctl-scp-probe-' || gate S2/SSH FAIL "scp 回读不一致"
+nms_ssh 'rm -f /tmp/nmsctl-scp-probe'
+if [ "$STOP_AFTER" = "ssh" ]; then
+  stage_verdict 2 null "高位口 ssh/scp 通（通道=$NMS_SSH_VIA；WG 握手判据随票 2 在此插桩）"
+  gate S2/SSH PASS "阶段 2 判据达成（STOP_AFTER=ssh）"
+  exit 0
+fi
 log "推送（或 sha 校验跳过）二进制——运行中的 nms 会 ETXTBSY，不一致时先停服务"
 REMOTE_NMS_SHA=$(ssh $SSHOPT -p "$SSHD_PORT" "root@$nms_ip_from_json" 'sha256sum /opt/nms/nms 2>/dev/null | cut -d" " -f1' || echo none)
 LOCAL_NMS_SHA=$(sha256sum "$NMS2_REPO/bin/nms" | cut -d' ' -f1)
@@ -151,4 +213,5 @@ print("config OK（GET 实效对账）:", want)
 EOF
 git -C "$NMS2_REPO" describe --tags --always > "$EVIDENCE/expected-agent-version.txt"
 log "期望 agent 版本：$(cat "$EVIDENCE/expected-agent-version.txt")"
+stage_verdict 3 null "health ok+迁移版本最新+四键 GET 实效对账（零防火墙）"
 gate S2 PASS "NMS=$nms_ip_from_json 健康（sshd:$SSHD_PORT）、零防火墙、配置就位"

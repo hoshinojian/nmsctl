@@ -61,13 +61,34 @@ nms_ip() {
 }
 # NMS API 基址在 api() 内动态取（nms-ip.txt 由 s2 写出）
 
-# 管理通道（R+L 演练 Step0 实录 2026-09-20 双形态）：缺省直连 22（2026-08 阻断已消失，
-# fw-soak-nms 放行 22；2222 因 Ubuntu 24.04 sshd socket 激活不生效，弃用）。
-# NMS_SSH_VIA=stunnel443：编排机本地代理 TUN 截直连 22 裸流（TCP 建连后 kex 前被断，
-# github:22 同症 fake-IP 198.18.x），443 裸 IP 放行——走 user-data6 预置的 stunnel
-# ssh-over-443。实现=维护 ~/.ssh/config 托管 Match 块（按 nms-ip.txt 幂等更新，见下），
-# 全部裸 ssh/scp $SSHOPT 调用点零改动自动生效；fw-soak-nms 须放行 443。
+# 管理通道（R+L 演练 Step0 实录 2026-09-20 三形态）：direct=直连 22（历史缺省）；
+# stunnel443=走 user-data6 预置的 ssh-over-443（本地代理 TUN 截直连 22 裸流时的解药）；
+# auto（2026-09-21 用户新增：出口会漂、TUN 时开时关）=lib/net-probe.sh 探测当前形态后
+# 自动选通道——fake-IP/raw22 截杀→stunnel443，净通道且 NMS:22 通→direct；DRILL_EGRES_AUTO=1
+# 时并以实测出口覆盖 EGRES_EXPECT。探测结论落 evidence/net-probe.json（解析用 sed，不 eval）。
 export NMS_SSH_VIA="${NMS_SSH_VIA:-direct}"
+# env.local 键的导出面（ISS-003 同款缺口实录：env.local 经 source 只是本 shell 变量，子进程
+# s2 等读不到——DRILL_FW_EXTRA_SOURCES 曾因此漏出 #18 的并集塑形）：凡"子进程脚本要读"的
+# 运行时键必须在此显式导出（BENCH_EXTRA_CONFIG 由 run-benchmark 自行导出）。
+export DRILL_FW_EXTRA_SOURCES="${DRILL_FW_EXTRA_SOURCES:-}"   # fw 塑形附加稳定源（nmsctl#18）
+export DRILL_EGRES_AUTO="${DRILL_EGRES_AUTO:-0}"              # auto 通道下以实测出口覆盖 EGRES_EXPECT
+if [ "$NMS_SSH_VIA" = "auto" ]; then
+  _np_out=$(bash "${SOAK_HOME}/lib/net-probe.sh" --eval 2>/dev/null || true)
+  NP_MODE=$(printf '%s\n' "$_np_out" | sed -n 's/^NP_MODE=//p')
+  NP_EGRESS=$(printf '%s\n' "$_np_out" | sed -n 's/^NP_EGRESS=//p')
+  NP_WHY=$(printf '%s\n' "$_np_out" | sed -n 's/^NP_WHY=//p')
+  if [ -n "$NP_MODE" ]; then
+    export NMS_SSH_VIA="$NP_MODE"
+    echo "[env] net-probe auto → NMS_SSH_VIA=$NP_MODE（$NP_WHY）"
+    if [ "${DRILL_EGRES_AUTO:-0}" = "1" ] && [ -n "$NP_EGRESS" ]; then
+      export EGRES_EXPECT="$NP_EGRESS"
+      echo "[env] DRILL_EGRES_AUTO=1 → EGRES_EXPECT 以实测出口覆盖（$NP_EGRESS）"
+    fi
+  else
+    export NMS_SSH_VIA="stunnel443"
+    echo "[env] net-probe auto 探测失败 → 兜底 NMS_SSH_VIA=stunnel443"
+  fi
+fi
 export SSHOPT="-o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=5"
 if [ "$NMS_SSH_VIA" = "stunnel443" ]; then
   nms_ssh_cfg_update() {  # 幂等维护 ~/.ssh/config 的 nmsctl 托管块（s2 前 nms-ip.txt 缺失则跳过）

@@ -176,7 +176,7 @@ log "总盘点（tag=env:soak 应 $((NODE_COUNT + 1)) = $NODE_COUNT 节点 + NMS
 census_ok=""
 for _c in 1 2 3 4 5 6; do
   "$VPSCTL" list -tag env:soak -no-check-ssh -output "$EVIDENCE/s3/inventory.json" > /dev/null
-  if ! REGION_EXPECT="$REGION_EXPECT" python3 - "$_c" <<'PYEOF'
+  if REGION_EXPECT="$REGION_EXPECT" python3 - "$_c" <<'PYEOF'
 import collections, json, os, sys
 d = json.load(open('evidence/s3/inventory.json'))
 items = d if isinstance(d, list) else d.get('items', d.get('droplets', []))

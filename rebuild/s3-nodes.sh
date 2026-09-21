@@ -171,10 +171,13 @@ print(sum(1 for c in d.get('created', []) if c.get('status') == 'active'))")
 done
 
 # ---- 总盘点断言：65 = 64 节点 + NMS；区域计数对表；全 active；唯一性 ----
-log "总盘点（tag=env:soak 应 $((NODE_COUNT + 1)) = $NODE_COUNT 节点 + NMS）"
-"$VPSCTL" list -tag env:soak -no-check-ssh -output "$EVIDENCE/s3/inventory.json" > /dev/null
-REGION_EXPECT="$REGION_EXPECT" python3 - <<'PYEOF'
-import collections, json, os
+#（ISS-017：批次 create 报 active 后 DO 状态可能仍瞬态非 active——断言前给 6×10s 传播重试窗）
+log "总盘点（tag=env:soak 应 $((NODE_COUNT + 1)) = $NODE_COUNT 节点 + NMS；非 active 时 6×10s 重试）"
+census_ok=""
+for _c in 1 2 3 4 5 6; do
+  "$VPSCTL" list -tag env:soak -no-check-ssh -output "$EVIDENCE/s3/inventory.json" > /dev/null
+  if ! REGION_EXPECT="$REGION_EXPECT" python3 - "$_c" <<'PYEOF'
+import collections, json, os, sys
 d = json.load(open('evidence/s3/inventory.json'))
 items = d if isinstance(d, list) else d.get('items', d.get('droplets', []))
 total_expect = int(os.environ['NODE_COUNT']) + 1
@@ -190,5 +193,11 @@ names = [i['name'] for i in items]
 assert len(set(names)) == len(names), "重名（P69）"
 assert len({i['id'] for i in items}) == len(items), "droplet id 重复"
 print("inventory OK:", dict(regions))
+sys.exit(0)
 PYEOF
+  then census_ok=1; break; fi
+  log "总盘点第 $_c 轮未过（状态传播/对表瞬态）——10s 后重试"
+  sleep 10
+done
+[ -n "$census_ok" ] || gate S3 FAIL "总盘点 6 轮未过（见 inventory.json——非 active/区域/tag/唯一性）"
 gate S3 PASS "$NODE_COUNT 台测试节点 + NMS 全部 active"

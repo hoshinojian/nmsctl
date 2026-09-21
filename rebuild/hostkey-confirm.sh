@@ -21,11 +21,11 @@ done | sort -u)
 # 可信渠道核对=观测值必须 ∈ 节点真实指纹集合，否则真异常拒确认。
 OBSERVED=$(nms_ssh "docker exec nms-timescaledb psql -U nms -d nms -tAc \
   \"SELECT last_seen_host_key FROM nodes WHERE id='$NID'\"" | tr -d '[:space:]')
-case "$OBSERVED" in
-  SHA256:*) :;;
+case "${OBSERVED^^}" in SHA256:*) :;;
   *) gate HKC FAIL "$NID 无待确认观测指纹（last_seen 空）——409 语境或字段异常：$OBSERVED";;
 esac
-if ! printf '%s\n' "$FPS" | grep -qxF "$OBSERVED"; then
+# 前缀大小写归一（DB=sha256:/ssh-keygen=SHA256:——第四次迭代实录：精确比对被大小写骗两次）
+if ! printf '%s\n' "$FPS" | awk -v obs="${OBSERVED^^}" 'toupper($0)==obs{f=1} END{exit !f}'; then
   gate HKC FAIL "$NID 观测指纹 $OBSERVED 不在节点真实集合（$(echo $FPS | tr '\n' ' ')）——疑似中间人/串机，人工核查"
 fi
 FP=$OBSERVED

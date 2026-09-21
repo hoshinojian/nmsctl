@@ -11,13 +11,15 @@ source "$SOAK_SELF_DIR/../lib/env.sh"   # SOAK_ENV(运行时目录)+env.local �
 # 过时值由 S0 经 DO 盘点（soaknms 前缀机实测 IP）自动纠正，无需改仓内任何文件。
 # preflight 已移除：拆机重建场景旧 NMS 必不可达；黑壳现象靠重开任务解决
 export DEPLOY_CONCURRENCY=12   # T3 必改(c)：dc 口径统一 12（计划 §〇；不显式导出会被 s2 兜底缺省吃掉）
-export DEPLOY_CONCURRENCY=12   # T3 必改(c)：dc 口径统一 12（计划 §〇；不显式导出会被 s2 兜底缺省吃掉）
 # 树参数注入口（R+L 演练票 0 复核补）：env.local 预设优先，缺省维持 #122/#123 bench 键。
-# 演练主几何经 env.local 注入 '"relay_fanout":4,"child_budget":2,"max_depth":8'——
-# 此前无条件覆盖曾会冲掉演练树参数（出度/深度），首轮 G5 必炸（票 0-4 预检可拦，杜绝于源头）。
+# 演练主几何经 env.local 注入 '"relay_fanout":4,"child_budget":2,"max_depth":8'。
+# ISS-003 教训（Round1 attempt3 实录）：预设分支曾漏 export——env.local 经 env.sh source
+# 进来的是本 shell 变量，s2 是子进程不继承非导出变量 → PUT 悟空（GET 全是注册表缺省
+# 3/7/4/2）。无论走哪个分支都必须 export。
 if [ -z "${BENCH_EXTRA_CONFIG:-}" ]; then
-  export BENCH_EXTRA_CONFIG='"relay_fanout":4,"race_parents":2'  # 决策 #122/#123 新键
+  BENCH_EXTRA_CONFIG='"relay_fanout":4,"race_parents":2'  # 决策 #122/#123 新键
 fi
+export BENCH_EXTRA_CONFIG
 T0=$(date -u +%FT%TZ)
 echo "=== BENCH START $T0 (EXPECT_HEAD=$EXPECT_HEAD NODE_COUNT=$NODE_COUNT) ==="
 

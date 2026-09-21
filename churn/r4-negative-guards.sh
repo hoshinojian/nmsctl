@@ -121,7 +121,7 @@ cat > /tmp/r4-flip5.sh <<'FLIP'
 # 1s 内 5 连翻：F,T,F,T,T（首个 false 保底真实翻转；后续 true 翻键入同窗去抖）
 for b in false true false true true; do
   curl -sS -m 30 -o /tmp/r4-flip-last.json -w "%{http_code}\n" -X PUT -H 'Content-Type: application/json' \
-    -d "{\"onboard\":$b}" http://127.0.0.1:80/api/v1/nodes/$1
+    -d "{\"onboard\":$b}" http://10.100.0.1:80/api/v1/nodes/$1
 done
 FLIP
 scp $SSHOPT -P "$SSHD_PORT" /tmp/r4-flip5.sh "root@$(nms_ip)":"/tmp/r4-flip5.sh" > /dev/null

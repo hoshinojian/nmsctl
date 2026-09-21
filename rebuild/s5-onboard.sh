@@ -51,8 +51,8 @@ write_burst_script() {
   cat > /tmp/burst-onboard.sh <<'BURST'
 #!/bin/bash
 for id in "$@"; do
-  ( c1=$(curl -sS -m 30 -o /dev/null -w "%{http_code}" -X PUT -H 'Content-Type: application/json' -d '{"onboard":false}' http://127.0.0.1:80/api/v1/nodes/$id)
-    code=$(curl -sS -m 30 -o /tmp/put-$id.json -w "%{http_code}" -X PUT -H 'Content-Type: application/json' -d '{"onboard":true}' http://127.0.0.1:80/api/v1/nodes/$id)
+  ( c1=$(curl -sS -m 30 -o /dev/null -w "%{http_code}" -X PUT -H 'Content-Type: application/json' -d '{"onboard":false}' http://10.100.0.1:80/api/v1/nodes/$id)
+    code=$(curl -sS -m 30 -o /tmp/put-$id.json -w "%{http_code}" -X PUT -H 'Content-Type: application/json' -d '{"onboard":true}' http://10.100.0.1:80/api/v1/nodes/$id)
     echo "$code $id" >> /tmp/burst-codes.txt ) &  # 只记最终 true-PUT 码；false 段失败会传导到 code
 done
 wait
@@ -111,7 +111,7 @@ except Exception:
 print(f"{ok}/{len(items)} rounds={rounds} detail={sorted(roles.items(), key=str)}")
 EOF
 )
-  ATT=$(curl -sS -m 10 "http://$(nms_ip)/api/v1/topology" 2>/dev/null | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('tree',{}).get('nodes',[])))" 2>/dev/null || echo '?')
+  ATT=$(curl -sS -m 10 "http://$NMS_API_ADDR/api/v1/topology" 2>/dev/null | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('tree',{}).get('nodes',[])))" 2>/dev/null || echo '?')
   log "  $STATUS attached=$ATT"
   STUCK=$(python3 - <<'STUCK_EOF'
 import json

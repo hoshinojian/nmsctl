@@ -45,7 +45,7 @@ for try in 1 2 3 4 5; do
   ok=1
   for ep in "nodes|api/v1/nodes" "topology|api/v1/topology" "alerts-active|api/v1/alerts?status=active&limit=200" "agent-deploy|api/v1/agent-deploy" "config|api/v1/config"; do
     name="${ep%%|*}"; path="${ep#*|}"
-    ssh $SSHOPT -p "$SSHD_PORT" "root@$NMS_TARGET" "curl -sS -m 15 http://127.0.0.1:80/$path" > "$B/$name.json" || ok=0
+    ssh $SSHOPT -p "$SSHD_PORT" "root@$NMS_TARGET" "curl -sS -m 15 http://$NMS_API_ADDR:80/$path" > "$B/$name.json" || ok=0
   done
   [ "$ok" = "1" ] && [ -s "$B/nodes.json" ] && { log "第 $try 轮抓取成功"; break; }
   [ "$try" = "5" ] && { echo "ABORT: 5 轮抓取均失败"; exit 1; }

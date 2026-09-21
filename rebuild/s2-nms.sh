@@ -137,8 +137,10 @@ log "生成编排机侧 wg0.conf（10.100.0.2/32 → $nms_ip_from_json:51820，k
   printf '\n[Peer]\nPublicKey = '
   cat "$EVIDENCE/s2/wg/nms.pub"
   printf '\nEndpoint = %s:51820\nAllowedIPs = 10.100.0.1/32\nPersistentKeepalive = 25\n' "$nms_ip_from_json"
-} > "$EVIDENCE/s2/wg/wg0-client.conf"
-chmod 600 "$EVIDENCE/s2/wg/wg0-client.conf"
+} > "$EVIDENCE/s2/wg/wg0.conf"
+chmod 600 "$EVIDENCE/s2/wg/wg0.conf"
+#（ISS-006：conf 文件名即 wg-quick 接口名——原名 wg0-client.conf 起的接口叫 wg0-client，
+# 而 wg show/ping 写死 wg0 → 握手检查必炸；更名后接口名=wg0，与全部探针一致）
 # stunnel443 形态：新机 IP 落盘即刷新 ~/.ssh/config 托管块——Round 协议每轮拆旧建新换 IP，
 # 仅靠 env.sh source 期刷新会滞后一轮（attempt2/3 实录两次 sshd 等待窗空烧）。
 declare -F nms_ssh_cfg_update >/dev/null && nms_ssh_cfg_update
@@ -168,8 +170,8 @@ nms_scp "$EVIDENCE/s2/scp-probe.txt" "root@$nms_ip_from_json:/tmp/nmsctl-scp-pro
 nms_ssh 'cat /tmp/nmsctl-scp-probe' | grep -q '^nmsctl-scp-probe-' || gate S2/SSH FAIL "scp 回读不一致"
 nms_ssh 'rm -f /tmp/nmsctl-scp-probe'
 log "WG 隧道置备（编排机侧 wg-quick 幂等重启 → 握手 → 隧道 ping → 公网 :80 负断言）"
-sudo wg-quick down "$EVIDENCE/s2/wg/wg0-client.conf" >/dev/null 2>&1 || true
-sudo wg-quick up "$EVIDENCE/s2/wg/wg0-client.conf" >/dev/null
+sudo wg-quick down "$EVIDENCE/s2/wg/wg0.conf" >/dev/null 2>&1 || true
+sudo wg-quick up "$EVIDENCE/s2/wg/wg0.conf" >/dev/null
 WG_HANDSHAKE_TS=null
 hs_ok=""
 for i in $(seq 1 24); do
@@ -180,7 +182,7 @@ for i in $(seq 1 24); do
   sleep 5
 done
 if [ -z "$hs_ok" ]; then
-  sudo wg-quick down "$EVIDENCE/s2/wg/wg0-client.conf" >/dev/null 2>&1 || true
+  sudo wg-quick down "$EVIDENCE/s2/wg/wg0.conf" >/dev/null 2>&1 || true
   gate S2/SSH FAIL "WG 握手 2min 未成（UDP 51820/密钥/端点——对照 C0 结论与 evidence/s2/wg/）"
 fi
 ping -c 3 -W 2 10.100.0.1 >/dev/null 2>&1 || gate S2/SSH FAIL "隧道 ping 10.100.0.1 不通（握手成而包不通=路由/MTU）"

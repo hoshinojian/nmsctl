@@ -11,12 +11,26 @@ source "$SOAK_SELF_DIR/../drill/inject/common.sh"   # node_ssh（-J NMS 跳板+a
 NID="${1:?用法: hostkey-confirm.sh <node-id> <management_ip>}"
 IP="${2:?缺 management_ip}"
 
-PUB=$(node_ssh "$IP" 'cat /etc/ssh/ssh_host_ed25519_key.pub')
-case "$PUB" in ssh-ed25519*' '*' '*) :;; *) echo "ABORT: 节点公钥读取异常" >&2; exit 1;; esac
-FP=$(printf '%s\n' "$PUB" | ssh-keygen -lf - | awk '{print $2}')
-case "$FP" in SHA256:*) :;; *) echo "ABORT: 指纹格式异常: $FP" >&2; exit 1;; esac
+PUBS=$(node_ssh "$IP" 'cat /etc/ssh/ssh_host_ed25519_key.pub /etc/ssh/ssh_host_rsa_key.pub /etc/ssh/ssh_host_ecdsa_key.pub 2>/dev/null')
+FPS=$(printf '%s\n' "$PUBS" | while read -r line; do
+  case "$line" in ssh-*) printf '%s\n' "$line" | ssh-keygen -lf - | awk '{print $2}';; esac
+done | sort -u)
+[ -n "$FPS" ] || { echo "ABORT: 节点 host key 读取异常" >&2; exit 1; }
 
-log "确认 $NID 指纹 $FP（经跳板实测，可信渠道）"
+# 观测指纹（confirm 的法定分母——握手协商的那把，算法族不定）只读取自 DB；
+# 可信渠道核对=观测值必须 ∈ 节点真实指纹集合，否则真异常拒确认。
+OBSERVED=$(nms_ssh "docker exec nms-timescaledb psql -U nms -d nms -tAc \
+  \"SELECT last_seen_host_key FROM nodes WHERE id='$NID'\"" | tr -d '[:space:]')
+case "$OBSERVED" in
+  SHA256:*) :;;
+  *) gate HKC FAIL "$NID 无待确认观测指纹（last_seen 空）——409 语境或字段异常：$OBSERVED";;
+esac
+if ! printf '%s\n' "$FPS" | grep -qxF "$OBSERVED"; then
+  gate HKC FAIL "$NID 观测指纹 $OBSERVED 不在节点真实集合（$(echo $FPS | tr '\n' ' ')）——疑似中间人/串机，人工核查"
+fi
+FP=$OBSERVED
+
+log "确认 $NID 指纹 $FP（观测值∈节点真实集合，核对通过）"
 # URL 的 $NMS_API_ADDR 在编排机侧展开（远端无此变量——首版误写 \$ 致空 host，PUT 打空）
 code=$(nms_ssh "curl -sS -m 30 -o /tmp/hkc.json -w '%{http_code}' -X PUT -H 'Content-Type: application/json' \
   --data '{\"fingerprint\":\"$FP\"}' http://$NMS_API_ADDR:80/api/v1/nodes/$NID/host-key/confirm")

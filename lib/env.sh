@@ -62,7 +62,8 @@ export no_proxy="${no_proxy:+$no_proxy,}10.100.0.0/24,127.0.0.1"
 # SOAK_BATCHES（s3 消费），此处只放全局标量。改分布时：先改 SOAK_BATCHES，
 # 再同步这三个标量，s3 会对账（合计 != NODE_COUNT 直接 ABORT）。
 export NODE_COUNT="${NODE_COUNT:-64}"           # 测试节点数（不含 NMS）
-export FIRST_HOP_COUNT="${FIRST_HOP_COUNT:-9}"  # 第一跳（domain0）台数，sgp1 批次前 9 台
+export FIRST_HOP_COUNT="${FIRST_HOP_COUNT:-9}"  # 第一跳（domain0）台数，首跳区批次前 N 台
+export FIRST_HOP_REGION="${FIRST_HOP_REGION:-sgp1}"  # 第一跳区域（v3.4 票 5：原 s4 硬编码参数化；档位几何可换区）
 export CHILD_BUDGET="${CHILD_BUDGET:-3}"        # 与 S2 PUT config 的 child_budget 同值（g5 不变量用）
 
 export NMS_IP_FILE="$EVIDENCE/nms-ip.txt"

@@ -128,7 +128,7 @@ PYEOF
 # （limit 静默丢失，s5 既有隐患）——R 波一律走 r_api_get/r_api_code（URL 远端单引号保护）。
 r_api_get() { # r_api_get <path[?query]> <outfile>
   local path=$1 out=$2
-  ssh $SSHOPT -p 22 "root@$(nms_ip)" "curl -sS -m 60 'http://127.0.0.1:80/api/v1$path'" > "$out"
+  ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" "curl -sS -m 60 'http://127.0.0.1:80/api/v1$path'" > "$out"
 }
 r_snap() { # r_snap <名称> <path[?query]> —— GET 快照落 evidence
   r_api_get "$2" "$R_DIR/$1" || return 1

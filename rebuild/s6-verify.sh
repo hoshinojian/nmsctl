@@ -59,10 +59,10 @@ assert len(items) == nc and not bad, (len(items), bad)
 print(f'{nc}/{nc} collection_ok')"
 
 log "pg_dump 全量基线备份 + pg_restore --list 可恢复验证"
-ssh $SSHOPT -p 22 "root@$(nms_ip)" 'docker exec nms-timescaledb pg_dump -U nms -Fc nms' > "$EVIDENCE/s6/nms-fresh-baseline.dump"
+ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" 'docker exec nms-timescaledb pg_dump -U nms -Fc nms' > "$EVIDENCE/s6/nms-fresh-baseline.dump"
 SIZE=$(stat -c%s "$EVIDENCE/s6/nms-fresh-baseline.dump")
 [ "$SIZE" -gt 10240 ] || gate S6 FAIL "dump 仅 $SIZE 字节"
-ssh $SSHOPT -p 22 "root@$(nms_ip)" 'docker exec -i nms-timescaledb pg_restore --list' < "$EVIDENCE/s6/nms-fresh-baseline.dump" > "$EVIDENCE/s6/dump-toc.txt"
+ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" 'docker exec -i nms-timescaledb pg_restore --list' < "$EVIDENCE/s6/nms-fresh-baseline.dump" > "$EVIDENCE/s6/dump-toc.txt"
 TOC_N=$(wc -l < "$EVIDENCE/s6/dump-toc.txt")
 [ "$TOC_N" -gt 100 ] || gate S6 FAIL "TOC 仅 $TOC_N 行"
 log "dump $SIZE 字节，TOC $TOC_N 行，可恢复"

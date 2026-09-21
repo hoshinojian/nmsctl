@@ -11,6 +11,9 @@ INJECT_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRY_RUN="${DRY_RUN:-0}"
 DRILL_FIXTURE="${DRILL_FIXTURE:-$INJECT_HOME/../tests/fixture}"
 W_LOG() { echo "[$(date -u +%FT%TZ)] $*" | tee -a "${SILENT_EVIDENCE:-/tmp/silent}/units.log"; }
+# DRY 分支不 source lib/env.sh（零网络），SSHD_PORT 在此给共用缺省（与 env.sh 同值；
+# DRY 日志里的规则文本才能如实呈现，注入单元 `set -u` 不因未定义崩——票 1 DRY 冒烟实录）。
+SSHD_PORT="${SSHD_PORT:-40222}"
 
 if [ "$DRY_RUN" = "1" ]; then
   api() { # DRY_RUN fixture：GET 读文件，其余只回 {"dry_run":true}
@@ -29,11 +32,12 @@ if [ "$DRY_RUN" = "1" ]; then
 else
   source "$INJECT_HOME/../../lib/env.sh"
   : "${DRILL_SSH_KEY:?DRY_RUN=0 时须设 DRILL_SSH_KEY（与 AUTHORIZED_KEY 配对的私钥路径）}"
-  # node_ssh 经 NMS 跳板（-J，六波前置修复 2026-09-21）：编排机→NMS→节点:22。
-  # 为什么恒走跳板：编排机直连节点 22 会撞本地代理 TUN 截杀（ISS-001 同形态——stunnel
-  # 只有 NMS user-data 预置，节点没有）；NMS 侧网络干净（witness→target 全程实证），
-  # 且编排机→NMS 段由 ~/.ssh/config 托管块自适应（auto/direct/stunnel443）——两段都不在
-  # 截杀面上，开不开梯子都通。
+  # node_ssh 经 NMS 跳板（-J，六波前置修复 2026-09-21）：编排机→NMS→节点:$SSHD_PORT。
+  # 为什么恒走跳板：编排机直连节点高位 sshd 同样会撞本地代理 TUN 截杀（ISS-001 同形态
+  # ——stunnel 只有 NMS user-data 预置，节点没有）；NMS 侧网络干净（witness→target 全程
+  # 实证），且编排机→NMS 段由 ~/.ssh/config 托管块自适应（auto/direct/stunnel443）——
+  # 两段都不在截杀面上，开不开梯子都通。-J 语法 root@host:port（跳板=NMS 高位口），
+  # 目标节点同为高位口（v3.4 全 fleet 统一 SSHD_PORT）。
   # 节点腿认证=NODE_PASS 密码（P81/D3：有密码账号建机走裸机路径，不注入 authorized_keys
   # ——DRILL_SSH_KEY 公钥在节点上不存在，askpass 注入密码；helper 只从 env 读密码不含密文）。
   # 跳板腿用默认身份密钥（NMS user-data 注入 AUTHORIZED_KEY）。
@@ -46,8 +50,8 @@ else
     printf '#!/bin/sh\nprintf "%%s\\n" "$NODE_PASS"\n' > "$ap"; chmod 700 "$ap"
     SSH_ASKPASS="$ap" SSH_ASKPASS_REQUIRE=force DISPLAY=:0 \
     ssh -o BatchMode=no -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
-        -o NumberOfPasswordPrompts=1 \
-        -J "root@$nip" -i "$DRILL_SSH_KEY" "root@$ip" "$@"
+        -o NumberOfPasswordPrompts=1 -p "$SSHD_PORT" \
+        -J "root@$nip:$SSHD_PORT" -i "$DRILL_SSH_KEY" "root@$ip" "$@"
     local rc=$?
     rm -f "$ap"
     return $rc

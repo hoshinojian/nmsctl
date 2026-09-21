@@ -10,8 +10,9 @@ BLOCK=${2:-240}
 mkdir -p "${SILENT_EVIDENCE:-/tmp/silent}"
 W_LOG "link-block-new: 目标 $NID 拦新连 ${BLOCK}s（P50：仅 NEW，旧会话存活）"
 
-RULE='iptables -w -I INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j DROP'
-UNRULE='iptables -w -D INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j DROP'
+# 双引号=本地展开（SSHD_PORT 来自 lib/env.sh；单引号会让远端 shell 展开未定义变量→坏规则）
+RULE="iptables -w -I INPUT -p tcp --dport $SSHD_PORT -m conntrack --ctstate NEW -j DROP"
+UNRULE="iptables -w -D INPUT -p tcp --dport $SSHD_PORT -m conntrack --ctstate NEW -j DROP"
 if [ "$DRY_RUN" = "1" ]; then
   W_LOG "DRY: $RULE（跳过）"; sleep 1; W_LOG "DRY: $UNRULE（跳过）"; exit 0
 fi

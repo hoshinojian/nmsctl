@@ -26,6 +26,15 @@ log "现网 env:soak 共 $FLEET_N 台（含 NMS）→ 已写入 fleet-count.txt"
 if [ "$FLEET_N" = "0" ]; then
   log "现网无 env:soak fleet（上轮已拆或首跑前）——S0 判定无可基线，SKIP"
   gate S0 PASS "无现网 fleet（0 台），S0 SKIP；S1 将据此良性跳过"
+  exit 0   #（票 7 修既有 bug：gate PASS 不退出，空跑 5 轮 API 探测后 ABORT——v3.4.1 审核实录）
+fi
+
+# 阶梯语境短路（票 7）：只有 NMS 一台而无 fleet 可抓——API 探测死后计数已落盘即 PASS-skip，
+# 阶段 1–3 收尾裸跑 s0&&s1 不再红退出。
+if [ "$FLEET_N" = "1" ]; then
+  log "仅 NMS 单机在网（阶梯阶段 1–3 语境）——基线抓取跳过（无 fleet 可抓），计数已落盘"
+  gate S0 PASS "单机语境 SKIP（阶梯阶段 1–3 收尾口径）"
+  exit 0
 fi
 
 # 基线目标机：优先用盘点里的 soaknms 前缀机（重建重跑时 env.sh 的 OLD_NMS_IP 已过时）

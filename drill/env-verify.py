@@ -49,6 +49,9 @@ def main():
                     help="运行时目录（含 env.local 与 evidence/）")
     ap.add_argument("--refresh", action="store_true", help="先重采活系统快照")
     ap.add_argument("--require-live", action="store_true")
+    ap.add_argument("--no-fleet", action="store_true",
+                    help="跳过 fleet 台数项（s2 后节点未建时用——Round2 实录：门原设 s2 后，"
+                         "0/79 必红；台数检查归 s4 后的第二道门）")
     a = ap.parse_args()
     root = pathlib.Path(a.root).resolve() if a.root else None
     if not root or not root.is_dir() or not (root / "env.local").exists():
@@ -82,7 +85,8 @@ def main():
         nodes = json.loads((snap / "nodes.json").read_text())
     if cfg is None:
         row("config", not a.require_live, "NMS 未建，跳过（--require-live 时计 ✗）")
-        row("fleet", not a.require_live, "NMS 未建，跳过")
+        if not a.no_fleet:
+            row("fleet", not a.require_live, "NMS 未建，跳过")
     else:
         want = {"child_budget": 3, "deploy_concurrency": int(env.get("DEPLOY_CONCURRENCY", "12")),
                 "discover_concurrency": 16, "handshake_pace": 100, "resweep_interval": 60,
@@ -93,10 +97,13 @@ def main():
         diff = {k: (got.get(k), v) for k, v in want.items() if got.get(k) != v}
         row("config", not diff, f"{len(want)} 键 GET 实效全等" if not diff else f"不符: {diff}")
 
-        items = nodes["items"]
-        fh = sum(1 for n in items if n.get("domain") == 0)
-        row("fleet", len(items) == int(env.get("NODE_COUNT", "-1")) and fh == int(env.get("FIRST_HOP_COUNT", "-1")),
-            f"nodes={len(items)}/{env.get('NODE_COUNT')} domain0={fh}/{env.get('FIRST_HOP_COUNT')}")
+        if a.no_fleet:
+            row("fleet", True, "按 --no-fleet 跳过（s2 门：节点未建，台数归 s4 后门）")
+        else:
+            items = nodes["items"]
+            fh = sum(1 for n in items if n.get("domain") == 0)
+            row("fleet", len(items) == int(env.get("NODE_COUNT", "-1")) and fh == int(env.get("FIRST_HOP_COUNT", "-1")),
+                f"nodes={len(items)}/{env.get('NODE_COUNT')} domain0={fh}/{env.get('FIRST_HOP_COUNT')}")
 
         # 4 树参交叉
         cb_ok = got.get("child_budget") == int(env.get("CHILD_BUDGET", got.get("child_budget")))

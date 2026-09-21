@@ -29,11 +29,19 @@ if [ "$DRY_RUN" = "1" ]; then
 else
   source "$INJECT_HOME/../../lib/env.sh"
   : "${DRILL_SSH_KEY:?DRY_RUN=0 时须设 DRILL_SSH_KEY（与 AUTHORIZED_KEY 配对的私钥路径）}"
-  node_ssh() { # node_ssh <management_ip> <远端命令…>（IP 白名单校验后直连）
+  # node_ssh 经 NMS 跳板（-J，六波前置修复 2026-09-21）：编排机→NMS→节点:22。
+  # 为什么恒走跳板：编排机直连节点 22 会撞本地代理 TUN 截杀（ISS-001 同形态——stunnel
+  # 只有 NMS user-data 预置，节点没有）；NMS 侧网络干净（witness→target 全程实证），
+  # 且编排机→NMS 段由 ~/.ssh/config 托管块自适应（auto/direct/stunnel443）——两段都不在
+  # 截杀面上，开不开梯子都通。跳板腿用默认身份（与节点同一把 DRILL_SSH_KEY 对应公钥，
+  # NMS user-data 同样注入 AUTHORIZED_KEY）。两段 IP 均过 IPv4 字面量门。
+  node_ssh() { # node_ssh <management_ip> <远端命令…>
     local ip=$1; shift
-    case "$ip" in (*[!0-9.]*|'') W_LOG "ABORT: 非法 IP $ip"; return 1;; esac
-    ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
-        -i "$DRILL_SSH_KEY" "root@$ip" "$@"
+    case "$ip" in (*[!0-9.]*|'') W_LOG "ABORT: 非法节点 IP $ip"; return 1;; esac
+    local nip; nip=$(cat "$REBUILD_DIR/evidence/nms-ip.txt" 2>/dev/null || true)
+    case "$nip" in (*[!0-9.]*|'') W_LOG "ABORT: nms-ip.txt 缺失或非 IPv4 字面量"; return 1;; esac
+    ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
+        -J "root@$nip" -i "$DRILL_SSH_KEY" "root@$ip" "$@"
   }
   vpsctl_run() { "$VPSCTL" "$@"; }
 fi

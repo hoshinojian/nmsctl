@@ -42,11 +42,13 @@ bash "$SOAK_HOME/rebuild/s1-teardown.sh"
 T_S1=$(date -u +%FT%TZ)
 rm -f "$EVIDENCE/s2/create-nms.json"   # nms.json 交由 s2 存活判定决定去留
 bash "$SOAK_HOME/rebuild/s2-nms.sh";       T_S2=$(date -u +%FT%TZ)
-# 环境↔代码对账门（2026-09-21 用户新增，ISS-003 泛化）：活系统快照（含通道探测自适应）
-# 与 env.local 逐项配位——出口/配置实效/台数/树参/防火墙，不配位即中止（不带着错配跑 79 台）。
-python3 "$SOAK_HOME/drill/env-verify.py" --refresh --require-live
+# 环境↔代码对账门·第一道（s2 后，配置面）：出口/配置实效/树参/防火墙——不配位即中止。
+# 台数项此时尚未建（--no-fleet，Round2 实录：全量门设此必红）；第二道在 s4 后。
+python3 "$SOAK_HOME/drill/env-verify.py" --refresh --require-live --no-fleet
 bash "$SOAK_HOME/rebuild/s3-nodes.sh";     T_S3=$(date -u +%FT%TZ)
 bash "$SOAK_HOME/rebuild/s4-import.sh";    T_S4=$(date -u +%FT%TZ)
+# 环境↔代码对账门·第二道（s4 后，全量）：台数/domain0 与 env 配位——开键前最后核对。
+python3 "$SOAK_HOME/drill/env-verify.py" --require-live
 bash "$SOAK_HOME/rebuild/s5-onboard.sh";   T_S5=$(date -u +%FT%TZ)   # 头条：开键→$NODE_COUNT/$NODE_COUNT 零介入
 bash "$SOAK_HOME/rebuild/s6-verify.sh";    T_S6=$(date -u +%FT%TZ)
 

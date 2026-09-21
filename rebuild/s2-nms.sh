@@ -46,12 +46,15 @@ fields = {"inject": f"DRILL_S2_STOP_AFTER={stop}", "proof_before": "evidence/s2/
           "cleanup": "同 recover"}
 json.dump(fields, open(sys.argv[1], "w"), ensure_ascii=False)
 PYEOF
+  #（ISS-007：时戳须加引号——裸 2026-…Z 非法 JSON；null 分支保留字面 null）
+  local wg_ts="null"
+  [ "${WG_HANDSHAKE_TS:-null}" != "null" ] && wg_ts="\"$WG_HANDSHAKE_TS\""
   python3 "$SOAK_HOME/observe/verdict.py" write "$SOAK_ENV/verdicts/ladder.jsonl" \
     --carrier "阶梯点亮（非矩阵）" --scenario "stage${ph}-${STOP_AFTER}-attempt${DRILL_ATTEMPT}" \
     --runbook "$rb" --verdict PASS --commit "$(git -C "$NMS2_REPO" rev-parse --short HEAD)" \
     --evidence "evidence/s2/log.txt" --notes "$note" \
     --stage "{\"phase\":${ph},\"rung\":${rg_:-null},\"attempt\":${DRILL_ATTEMPT},\"form\":null}" \
-    --channel "{\"nms_ssh_via\":\"${NMS_SSH_VIA}\",\"wg_handshake\":${WG_HANDSHAKE_TS:-null}}"
+    --channel "{\"nms_ssh_via\":\"${NMS_SSH_VIA}\",\"wg_handshake\":${wg_ts}}"
 }
 
 check_egress

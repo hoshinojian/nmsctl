@@ -114,10 +114,11 @@ else:
     print(f"G3 OK (resume): payload {NC} 台入库齐全 ∧ domain 对齐审计件；全集分布（记录不断言）: {dist}")
 EOF
 # 凭据落库对账（v3.4 票 5：API 设计不回密码——04 契约密码不外显，故对账走 NMS 本机只读
-# psql：ssh_password 非空计数==NC；只读查询、无参数拼接，AGENTS「脚本 DB 只读」口径）
-log "凭据落库对账（psql 只读：nodes.ssh_password 非空计数 == $NODE_COUNT）"
+# psql：未归档（deleted_at IS NULL——DELETE /nodes 为软删归档，行留档含密码不计入，ISS-012）
+# 节点的 ssh_password 非空计数==NC；只读查询、无参数拼接，AGENTS「脚本 DB 只读」口径）
+log "凭据落库对账（psql 只读：未归档 nodes.ssh_password 非空计数 == $NODE_COUNT）"
 CRED_N=$(nms_ssh "docker exec nms-timescaledb psql -U nms -d nms -tAc \
-  \"SELECT count(*) FROM nodes WHERE ssh_password IS NOT NULL AND ssh_password <> ''\"")
+  \"SELECT count(*) FROM nodes WHERE deleted_at IS NULL AND ssh_password IS NOT NULL AND ssh_password <> ''\"")
 [ "$CRED_N" = "$NODE_COUNT" ] || gate S4 FAIL "凭据落库 $CRED_N != $NODE_COUNT（导入载荷密码段丢失？）"
 log "凭据落库 $CRED_N/$NODE_COUNT ✓"
 

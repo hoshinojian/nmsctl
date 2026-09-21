@@ -108,17 +108,33 @@ if fail:
 PYEOF
 
 # ---- 建机：按缺口补建（每轮补建前重新盘点存量，防部分成功后整批重试超建）----
-NODE_UD="$EVIDENCE/s3/node-user-data.sh"   # D3 分叉实例化件（懒实例化，0600 落运行时目录）
+# ISS-013（v3.4 高位口）：全批次统一走 user-data 路径——节点模板（禁 ssh.socket+Port
+# $SSHD_PORT+authorized_keys）必须在每台节点上运行；有密码账号经「strip ssh_password 的
+# 临时账号配置」绕 P70① 互斥（s2 NMS 建机同款），密码由模板 chpasswd 设同值 NODE_PASS
+#（与 s4 载荷 ssh_password 同源）。裸机交付路径退役。
+NODE_UD="$EVIDENCE/s3/node-user-data.sh"   # 统一实例化件（0600 落运行时目录，不入库）
+[ -f "$NODE_UD" ] || instantiate_user_data "$SOAK_HOME/rebuild/node-user-data-ascii.sh" "$NODE_UD"
+[ -n "${AUTHORIZED_KEY:-}" ] || { echo "ABORT: AUTHORIZED_KEY 未设置——user-data 统一路径必需（authorized_keys 注入）" >&2; exit 1; }
+strip_account_cfg() { # strip_account_cfg <账号名> → 临时配置路径（密码剔除，0600）
+  python3 - "$1" <<'PYEOF'
+import json, os, sys
+name = sys.argv[1]
+cfg = json.load(open(os.environ['VPSCTL_ACCOUNTS']))
+arr = cfg['accounts'] if isinstance(cfg, dict) else cfg
+one = [dict(a) for a in arr if a['name'] == name]
+assert len(one) == 1, f'账号 {name} 不在 accounts 配置'
+one[0].pop('ssh_password', None)
+out = f"evidence/s3/accounts-{name}-stripped.json"
+json.dump({"accounts": one}, open(out, 'w'))
+os.chmod(out, 0o600)
+print(out)
+PYEOF
+}
 for line in "${BATCHES[@]}"; do
   set -- $line; region=$1; acct=$2; want=$3; size=$4
-  ud_args=()
-  if grep -qx "$acct" "$EVIDENCE/s3/passwordless-accounts.txt"; then
-    # D3：无 ssh_password 账号批次传实例化 user-data（vpsctl 互斥规则：误对有密码批
-    # 传 user-data 会 fail-fast 报错而非静默；有密码批不传，维持 vpsctl 注入现状）
-    [ -f "$NODE_UD" ] || instantiate_user_data "$SOAK_HOME/rebuild/node-user-data-ascii.sh" "$NODE_UD"
-    ud_args=(-user-data "$NODE_UD")
-    log "分叉确认：$acct 无 ssh_password，本批 create 将传 user-data（D3）"
-  fi
+  ACCT_CFG=$(strip_account_cfg "$acct")
+  ud_args=(-user-data "$NODE_UD" -accounts "$ACCT_CFG")
+  log "统一 user-data 路径：$acct（strip 密码临时配置+模板自设同值；高位口 $SSHD_PORT）"
   done_flag=""
   for try in 1 2 3; do
     inv="$EVIDENCE/s3/have-$region-$acct-try$try.json"

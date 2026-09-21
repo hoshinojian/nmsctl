@@ -42,20 +42,25 @@ sys.path.insert(0, str(HERE.parent / "observe"))
 import verdict as verdict_mod  # noqa: E402  复用八字段哈希（与 verdict.py 同仓同构）
 
 WRAPPER = str(HERE / "nms-ssh.sh")  # ssh 包装（IP 读取+校验在包装内；DRILL_EVIDENCE_ROOT）
-QUERIES = {  # 全只读；:lag/:lockwait/:since 经头部 \set 绑定（:'var' 字面量转义）
-    "nodes_distribution": "SELECT role,status,collection_state,count(*) FROM nodes GROUP BY 1,2,3 ORDER BY 4 DESC;",
+QUERIES = {  # 全只读；role/orphaned 在 nodes、status/collection_state 在 node_latest_state（Round1 轮末闸实录：nodes 表无此二列）；:lag/:lockwait/:since 经头部 \set 绑定（:'var' 字面量转义）
+    "nodes_distribution": ("SELECT n.role,nls.status,nls.collection_state,count(*) FROM nodes n "
+                           "JOIN node_latest_state nls ON nls.node_id=n.id "
+                           "WHERE n.deleted_at IS NULL GROUP BY 1,2,3 ORDER BY 4 DESC;"),
     "orphans_pending": "SELECT count(*) FILTER (WHERE orphaned_at IS NOT NULL), count(*) FILTER (WHERE role='idle'), count(*) FILTER (WHERE role='provisioning') FROM nodes;",
     "dispatch_inflight": "SELECT status,count(*) FROM dispatch_tasks WHERE status IN ('pending','running') GROUP BY 1;",
     "metrics_freshness": ("\\set lag 45min\n"
                           "SELECT coalesce(max(ts)::text,'none'), count(*) FROM metrics WHERE ts > now() - :'lag'::interval;"),
     "cagg_watermark": "SELECT coalesce(max(bucket)::text,'none') FROM metrics_hourly;",
-    "bgw_jobs": "SELECT coalesce(job_id::text,'-'),coalesce(application_name,'-'),coalesce(last_run_status,'-') FROM timescaledb_information.jobs;",
+    "bgw_jobs": ("SELECT j.job_id::text, j.application_name, "
+                 "COALESCE(s.last_run_status,'-'), COALESCE(s.job_status,'-') "
+                 "FROM timescaledb_information.jobs j "
+                 "LEFT JOIN timescaledb_information.job_stats s ON s.job_id=j.job_id;"),
     "lock_waits": ("\\set lockwait 10s\n"
                    "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type='Lock' AND state='active' AND now()-query_start > :'lockwait'::interval;"),
     "conn_count": "SELECT count(*) FROM pg_stat_activity WHERE datname='nms';",
     "migration_version": "SELECT version FROM schema_migrations;",
     "audit_rows": ("\\set since 24h\n"
-                   "SELECT count(*) FROM audit_log WHERE created_at >= now() - :'since'::interval;"),
+                   "SELECT count(*) FROM audit_log WHERE ts >= now() - :'since'::interval;"),
 }
 
 
@@ -126,8 +131,9 @@ class Gate:
         f = self.evdir / f"{name}.sql"
         f.write_text(QUERIES[name] + "\n")
         cp = subprocess.run(
+            # -F'|'：分隔符字面量穿远端 shell（裸 | 会被当管道，Round1 轮末闸实录）
             ["bash", WRAPPER, "docker", "exec", "-i", "nms-timescaledb",
-             "psql", "-U", "nms", "-d", "nms", "-X", "-v", "ON_ERROR_STOP=1", "-At", "-F|"],
+             "psql", "-U", "nms", "-d", "nms", "-X", "-v", "ON_ERROR_STOP=1", "-At", "-F'|'"],
             stdin=open(f, "rb"), capture_output=True, text=True)
         if cp.returncode != 0:
             raise RuntimeError(f"psql {name} 失败: {cp.stderr[:200]}")
@@ -205,7 +211,7 @@ def main():
         g.psql("cagg_watermark")
         g.psql("bgw_jobs")
         bad_jobs = [l for l in g.evidence["bgw_jobs"].splitlines()
-                    if l.split("|")[-1] not in ("-", "success", "scheduled", "")]
+                    if any(x.strip() in ("failed", "error", "crashed") for x in l.split("|"))]
         g.check(not bad_jobs, f"bgw job 非 success：{bad_jobs}")
         g.psql("lock_waits")
         g.check(g.evidence["lock_waits"] == "0", f"长锁等待 {g.evidence['lock_waits']} 条（>10s）")

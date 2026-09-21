@@ -45,14 +45,10 @@ echo "$IDS" > "$EVIDENCE/s5/onboard-ids.txt"
 N_TARGETS=$(grep -c . "$EVIDENCE/s5/onboard-ids.txt" || true)
 log "开键/补试目标：$N_TARGETS/$NODE_COUNT 台未收敛"
 
-if [ "$N_TARGETS" = "0" ]; then
-  log "零未收敛目标：跳过 burst（全 fleet 已收敛，直接进入 G4'/G5' 断言）"
-else
-log "同一窗内连发 $N_TARGETS 个 P74 舞步 PUT（计时）"
-T0=$(date +%s%3N)
-# 爆发开键：脚本推到 NMS 本机执行（loopback 并发 <1s，保住 #184 的 1s 合批窗口；
-# 本地直连 :80 有间歇吞包——2026-09-11）。逐台 HTTP 码断言，非 2xx 立即 FAIL。
-cat > /tmp/burst-onboard.sh <<'BURST'
+# burst 脚本生成（初爆发键与 late-join 补试共用——ISS-004 工具刀：补试同样要保住
+# #184 的 1s 合批窗，NMS 本机 loopback 并发 P74 舞步）。幂等：重复生成同内容。
+write_burst_script() {
+  cat > /tmp/burst-onboard.sh <<'BURST'
 #!/bin/bash
 for id in "$@"; do
   ( c1=$(curl -sS -m 30 -o /dev/null -w "%{http_code}" -X PUT -H 'Content-Type: application/json' -d '{"onboard":false}' http://127.0.0.1:80/api/v1/nodes/$id)
@@ -62,6 +58,16 @@ done
 wait
 sort /tmp/burst-codes.txt
 BURST
+}
+write_burst_script
+
+if [ "$N_TARGETS" = "0" ]; then
+  log "零未收敛目标：跳过 burst（全 fleet 已收敛，直接进入 G4'/G5' 断言）"
+else
+log "同一窗内连发 $N_TARGETS 个 P74 舞步 PUT（计时）"
+T0=$(date +%s%3N)
+# 爆发开键：脚本推到 NMS 本机执行（loopback 并发 <1s，保住 #184 的 1s 合批窗口；
+# 本地直连 :80 有间歇吞包——2026-09-11）。逐台 HTTP 码断言，非 2xx 立即 FAIL。
 scp $SSHOPT -P 22 /tmp/burst-onboard.sh "root@$(nms_ip)":"/tmp/burst-onboard.sh" > /dev/null
 ssh $SSHOPT -p 22 "root@$(nms_ip)" "rm -f /tmp/burst-codes.txt; chmod +x /tmp/burst-onboard.sh && /tmp/burst-onboard.sh $(tr '
 ' ' ' < "$EVIDENCE/s5/onboard-ids.txt")" > "$EVIDENCE/s5/burst-codes.txt"
@@ -125,12 +131,18 @@ except Exception:
 " 2>/dev/null || echo 1)
   if [ "$STUCK" -gt 0 ] && [ "$LATEJOIN_PASSES" -lt 2 ] && [ "$RUNNING" = "0" ] && [ $((NOW - START)) -ge 120 ] && [ $((NOW - LAST_LATEJOIN)) -ge 120 ]; then
     LATEJOIN_PASSES=$((LATEJOIN_PASSES + 1)); LAST_LATEJOIN=$NOW
-    log "  late-join 补试第 $LATEJOIN_PASSES 轮：$STUCK 台滞留（idle，合批窗口后到达的单飞弹回）——P74 舞步"
-    for id in $(python3 -c "import json;print(' '.join(json.load(open('evidence/s5/latejoin-stuck.json'))))"); do
-      api PUT "/nodes/$id" '{"onboard":false}' > /dev/null 2>&1 || true
-      api PUT "/nodes/$id" '{"onboard":true}' > /dev/null 2>&1 || true
-    done
-    printf '{"passes": %s, "stuck": %s, "at": "%s"}\n' "$LATEJOIN_PASSES" "$STUCK" "$(date -u +%FT%TZ)" >> "$EVIDENCE/s5/latejoin-passes.jsonl"
+    # ISS-004 工具刀（2026-09-21）：补试改 NMS 本机并发 PUT（与初爆发键同款 burst 脚本）——
+    # 原编排机经 SSH 隧道逐台 api PUT ~2.5s/台，全部落在 #184 的 1s 合批窗外，77 台各成
+    # 1 台批→1 台轮单飞串行（attempt4 实录 rounds 2-24 全 nodes=1）。并发同窗=一个
+    # ProvisionBatch=一轮大轮，G4' fresh 构成式回到设计形态。
+    log "  late-join 补试第 $LATEJOIN_PASSES 轮：$STUCK 台滞留（idle，合批窗口后到达的单飞弹回）——P74 舞步·NMS 本机并发（保 1s 合批窗）"
+    STUCK_IDS=$(python3 -c "import json;print(' '.join(json.load(open('evidence/s5/latejoin-stuck.json'))))")
+    scp $SSHOPT -P 22 /tmp/burst-onboard.sh "root@$(nms_ip)":"/tmp/burst-onboard.sh" > /dev/null 2>&1 || true
+    ssh $SSHOPT -p 22 "root@$(nms_ip)" "rm -f /tmp/burst-codes.txt; chmod +x /tmp/burst-onboard.sh && /tmp/burst-onboard.sh $STUCK_IDS" \
+      > "$EVIDENCE/s5/latejoin-pass$LATEJOIN_PASSES-codes.txt" 2>&1 || true
+    LJ_OK=$(grep -c "^2" "$EVIDENCE/s5/latejoin-pass$LATEJOIN_PASSES-codes.txt" || true)
+    log "  late-join 第 $LATEJOIN_PASSES 轮发射 $STUCK 台，2xx 响应 $LJ_OK 条（同窗合批）"
+    printf '{"passes": %s, "stuck": %s, "ok2xx": %s, "at": "%s"}\n' "$LATEJOIN_PASSES" "$STUCK" "$LJ_OK" "$(date -u +%FT%TZ)" >> "$EVIDENCE/s5/latejoin-passes.jsonl"
   fi
   case "$STATUS" in "${NODE_COUNT}/${NODE_COUNT} "*) converged=1; break;; esac
   sleep 5

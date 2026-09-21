@@ -13,7 +13,9 @@ schema 见同目录 verdict-schema.md（rl-drill-verdict/1）。两个子命令�
   python3 observe/verdict.py write <out.jsonl> --carrier "W-B 断链抖动" \
       --scenario ssh-14.1-sshd-stop-old-session --case SSH-14.1 \
       --runbook <八字段.json> --verdict PASS --commit <hash> \
-      [--requestid <id>] [--evidence path ...] [--notes ...]
+      [--requestid <id>] [--evidence path ...] [--notes ...] \
+      [--stage '{"phase":2,"rung":null,"attempt":1,"form":null}'   # 仅「阶梯点亮」载体 \
+       --channel '{"nms_ssh_via":"auto","wg_handshake":null}']      # 任意载体，漂移回放
   python3 observe/verdict.py check <a.jsonl> [b.jsonl ...] [--cases cases.json]
 """
 import argparse
@@ -24,18 +26,32 @@ import re
 import sys
 
 SCHEMA = "rl-drill-verdict/1"
-CARRIERS = {  # 与 NMS2 scripts/dev/rl-drill-freeze.py R_CARRIERS/L 载体同名（跨仓约定）
+CARRIERS = {  # 矩阵载体与 NMS2 scripts/dev/rl-drill-freeze.py R_CARRIERS/L 载体同名（跨仓约定）；
+    # 非矩阵载体（阶梯/健康闸/静默窗）只在本表登记，不进冻结分母（freeze.py 只数矩阵载体）
     "W-A 树韧性疏散", "W-B 断链抖动", "W-C 容量共享", "W-D 生命周期真机",
     "W-E 指令阈值", "W-F 部署环境收口",
     "第一部分建树循环（SYS-01 以循环证据登记）", "SYS-15 真机全形态票",
     "SYS-16 24h 长静默窗",
     "L 本地（LIFE-AG-04/COLL-16/SSH-16/API-07）", "L 真机搭车", "非矩阵（健康闸/静默窗等）",
+    "阶梯点亮（非矩阵）",  # v3.4.1 票 6：bring-up 阶梯 attempt 留痕载体（连续绿计数依据）
 }
+LADDER_CARRIER = "阶梯点亮（非矩阵）"
+STAGE_FORMS = ("fresh", "resume")
+TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 EIGHT_FIELDS = ("inject", "proof_before", "proof_effective", "exercise",
                 "observe", "recover", "proof_after", "cleanup")
 CASE_RE = re.compile(r"^[A-Z]+-\d+(\.\d+)?$")
 HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def parse_opt_json(flag_name: str, raw: str):
+    """--stage/--channel 接受内联 JSON 或 @file（与 --runbook 同源数据）。"""
+    try:
+        text = open(raw[1:]).read() if raw.startswith("@") else raw
+        return json.loads(text)
+    except (OSError, json.JSONDecodeError) as e:
+        sys.exit(f"ERROR: {flag_name} 解析失败（内联 JSON 或 @file）: {e}")
 
 
 def eight_field_hash(runbook: dict) -> str:
@@ -58,6 +74,10 @@ def cmd_write(a):
     }
     if a.requestid:
         rec["requestid"] = a.requestid   # 不带=字段不出现（schema 规则 6）
+    if a.stage:                          # 阶梯 attempt 留痕（票 6）——不进八字段哈希
+        rec["stage"] = parse_opt_json("--stage", a.stage)
+    if a.channel:                        # 通道漂移回放（票 6）——不进八字段哈希
+        rec["channel"] = parse_opt_json("--channel", a.channel)
     if a.verdict == "SKIPPED_DUE_TO":
         rec["skipped_due_to"] = a.skipped_due_to or "UNSET"
     with open(a.out, "a") as f:
@@ -102,6 +122,40 @@ def check_record(rec, cases, path, lineno, errs):
         bad("scenario 为空")
 
 
+def check_stage_channel(rec, path, lineno, errs):
+    """stage/channel 可选字段校验（v3.4.1 票 6；两字段均不入八字段哈希）。"""
+    def bad(msg):
+        errs.append(f"{path}:{lineno}: {msg}")
+    st = rec.get("stage")
+    if st is not None:
+        if not isinstance(st, dict):
+            bad(f"stage {st!r} 须为对象"); return
+        if rec.get("carrier") != LADDER_CARRIER:
+            bad(f"stage 仅 {LADDER_CARRIER!r} 载体可带（当前 {rec.get('carrier')!r}）")
+        ph = st.get("phase")
+        if not (isinstance(ph, int) and not isinstance(ph, bool) and 1 <= ph <= 5):
+            bad(f"stage.phase {ph!r} 须为 1–5 整数（阶梯阶段）")
+        at = st.get("attempt")
+        if not (isinstance(at, int) and not isinstance(at, bool) and at >= 1):
+            bad(f"stage.attempt {at!r} 须为 ≥1 整数（attempt 序号，连续绿计数依据）")
+        rg = st.get("rung")
+        if rg is not None and not (isinstance(rg, str) and rg):
+            bad(f"stage.rung {rg!r} 须非空字符串或 null（档位：nms/5vps/1node/10node…）")
+        fm = st.get("form")
+        if fm is not None and fm not in STAGE_FORMS:
+            bad(f"stage.form {fm!r} 须为 {'/'.join(STAGE_FORMS)} 或 null（s5 形态判定，P82）")
+    ch = rec.get("channel")
+    if ch is not None:
+        if not isinstance(ch, dict):
+            bad(f"channel {ch!r} 须为对象"); return
+        via = ch.get("nms_ssh_via")
+        if not (isinstance(via, str) and via):
+            bad(f"channel.nms_ssh_via {via!r} 须非空字符串（auto/direct/stunnel443 实际生效值）")
+        wg = ch.get("wg_handshake")
+        if wg is not None and not (isinstance(wg, str) and TS_RE.match(wg)):
+            bad(f"channel.wg_handshake {wg!r} 须 UTC ISO8601（…Z）或 null（wg show 最近握手）")
+
+
 def cmd_check(a):
     cases = None
     if a.cases:
@@ -124,6 +178,7 @@ def cmd_check(a):
                 errs.append(f"{path}:{lineno}: JSON 解析失败 {e}")
                 continue
             check_record(rec, cases, path, lineno, errs)
+            check_stage_channel(rec, path, lineno, errs)
             key = (rec.get("carrier", "?"), rec.get("verdict", "?"))
             agg[key] = agg.get(key, 0) + 1
     print(f"== verdict check ==  文件 {len(a.jsonl)} 行 {n}")
@@ -153,6 +208,10 @@ def main():
     w.add_argument("--skipped-due-to", default=None)
     w.add_argument("--evidence", nargs="*", default=[])
     w.add_argument("--notes", default="")
+    w.add_argument("--stage", default=None,
+                   help='阶梯 attempt 结构化对象（内联 JSON 或 @file）：{"phase":1..5,"rung":"nms|5vps|1node|10node|null","attempt":N,"form":"fresh|resume|null"}——仅「阶梯点亮」载体可带')
+    w.add_argument("--channel", default=None,
+                   help='通道字段（内联 JSON 或 @file）：{"nms_ssh_via":"auto|direct|stunnel443","wg_handshake":"<UTC ISO8601>|null"}——任意载体可带，漂移可回放')
     c = sub.add_parser("check")
     c.add_argument("jsonl", nargs="+")
     c.add_argument("--cases", default=None, help="cases.json（校验 case 存在于 variant_frozen）")

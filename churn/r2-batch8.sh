@@ -121,8 +121,8 @@ done
 wait
 sort /tmp/r2-codes.txt
 BURST
-scp $SSHOPT -P 22 /tmp/r2-burst.sh "root@$(nms_ip)":"/tmp/r2-burst.sh" > /dev/null
-ssh $SSHOPT -p 22 "root@$(nms_ip)" "rm -f /tmp/r2-codes.txt; chmod +x /tmp/r2-burst.sh && /tmp/r2-burst.sh $(tr '\n' ' ' < "$R_DIR/target-ids.txt")" \
+scp $SSHOPT -P "$SSHD_PORT" /tmp/r2-burst.sh "root@$(nms_ip)":"/tmp/r2-burst.sh" > /dev/null
+ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" "rm -f /tmp/r2-codes.txt; chmod +x /tmp/r2-burst.sh && /tmp/r2-burst.sh $(tr '\n' ' ' < "$R_DIR/target-ids.txt")" \
   > "$R_DIR/burst-codes.txt"
 T_KICK=$(date +%s)
 N_FAIL=0

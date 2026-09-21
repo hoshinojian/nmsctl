@@ -124,8 +124,8 @@ for b in false true false true true; do
     -d "{\"onboard\":$b}" http://127.0.0.1:80/api/v1/nodes/$1
 done
 FLIP
-scp $SSHOPT -P 22 /tmp/r4-flip5.sh "root@$(nms_ip)":"/tmp/r4-flip5.sh" > /dev/null
-ssh $SSHOPT -p 22 "root@$(nms_ip)" "chmod +x /tmp/r4-flip5.sh && /tmp/r4-flip5.sh $ID_FLIP" > "$R_DIR/flip5-codes.txt"
+scp $SSHOPT -P "$SSHD_PORT" /tmp/r4-flip5.sh "root@$(nms_ip)":"/tmp/r4-flip5.sh" > /dev/null
+ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" "chmod +x /tmp/r4-flip5.sh && /tmp/r4-flip5.sh $ID_FLIP" > "$R_DIR/flip5-codes.txt"
 N_BAD=0
 while read -r code; do
   case "$code" in 2??) ;; *) N_BAD=$((N_BAD+1));; esac

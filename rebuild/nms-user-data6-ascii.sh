@@ -1,10 +1,10 @@
 #!/bin/bash
 # NMS droplet bootstrap template (ASCII-only per P70: DO user-data mangles
 # non-ASCII into C1 control chars, which makes docker compose reject the YAML).
-# Template copy lives in-repo with a __NODE_PASS__ placeholder and zero
-# credentials; scripts/soak/rebuild/s2-nms.sh instantiates it into
-# $REBUILD_DIR/nms-user-data6-ascii.sh (replacing __NODE_PASS__ with the
-# env.local NODE_PASS) before `vpsctl create -user-data`. s2-repair.sh replays
+# Template copy lives in-repo with __NODE_PASS__/__AUTHORIZED_KEY__/__SSHD_PORT__
+# placeholders and zero credentials; scripts/soak/rebuild/s2-nms.sh instantiates
+# it into $REBUILD_DIR/nms-user-data6-ascii.sh (via lib/env.sh
+# instantiate_user_data) before `vpsctl create -user-data`. s2-repair.sh replays
 # the same instantiated runtime copy. Do not put real secrets in this file.
 set -Eeuxo pipefail
 STATUS=/var/log/bootstrap-status
@@ -20,9 +20,20 @@ mkdir -p /var/log/soak /opt/nms/agents /opt/nms/backups /root/.ssh
 chmod 700 /root/.ssh
 echo '__AUTHORIZED_KEY__' > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
 echo 'root:__NODE_PASS__' | chpasswd
-sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-systemctl restart ssh || systemctl restart sshd
-# (Port 2222 append removed: Ubuntu 24.04 sshd is socket-activated; custom Port in sshd_config is ignored. Mgmt channel = 22.)
+# v3.4 high-port sshd (zero-firewall baseline): Ubuntu 24.04 ships ssh.socket
+# (socket activation) which ignores Port in sshd_config (P7) — disable socket
+# activation, run ssh.service directly, then bind the drill port.
+# NMS hardening (v3.4): pubkey-only root (break-glass leg keeps working via key;
+# password stays valid on the DO console only). Nodes keep password auth
+# (product behavior, see node-user-data template).
+systemctl disable --now ssh.socket 2>/dev/null || true
+systemctl enable ssh.service >/dev/null 2>&1 || true
+cat > /etc/ssh/sshd_config.d/99-soak.conf <<'SSHEOF'
+Port __SSHD_PORT__
+PasswordAuthentication no
+PermitRootLogin prohibit-password
+SSHEOF
+systemctl restart ssh.service || systemctl restart sshd
 emit "STAGE=apt"
 timeout 300 apt-get update -y
 timeout 600 apt-get install -y docker.io docker-compose-v2 stunnel4 python3
@@ -101,7 +112,7 @@ cert = /etc/ssl/private/stunnel.pem
 key = /etc/ssl/private/stunnel.pem
 [ssh-443]
 accept = 443
-connect = 127.0.0.1:22
+connect = 127.0.0.1:__SSHD_PORT__
 STCONF
 systemctl restart stunnel4 || stunnel4 /etc/stunnel/ssh-443.conf
 emit "BOOTSTRAP-OK"

@@ -68,8 +68,8 @@ log "同一窗内连发 $N_TARGETS 个 P74 舞步 PUT（计时）"
 T0=$(date +%s%3N)
 # 爆发开键：脚本推到 NMS 本机执行（loopback 并发 <1s，保住 #184 的 1s 合批窗口；
 # 本地直连 :80 有间歇吞包——2026-09-11）。逐台 HTTP 码断言，非 2xx 立即 FAIL。
-scp $SSHOPT -P 22 /tmp/burst-onboard.sh "root@$(nms_ip)":"/tmp/burst-onboard.sh" > /dev/null
-ssh $SSHOPT -p 22 "root@$(nms_ip)" "rm -f /tmp/burst-codes.txt; chmod +x /tmp/burst-onboard.sh && /tmp/burst-onboard.sh $(tr '
+scp $SSHOPT -P "$SSHD_PORT" /tmp/burst-onboard.sh "root@$(nms_ip)":"/tmp/burst-onboard.sh" > /dev/null
+ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" "rm -f /tmp/burst-codes.txt; chmod +x /tmp/burst-onboard.sh && /tmp/burst-onboard.sh $(tr '
 ' ' ' < "$EVIDENCE/s5/onboard-ids.txt")" > "$EVIDENCE/s5/burst-codes.txt"
 PUT_FAIL=0
 while read -r code id; do
@@ -141,8 +141,8 @@ except Exception:
     # ProvisionBatch=一轮大轮，G4' fresh 构成式回到设计形态。
     log "  late-join 补试第 $LATEJOIN_PASSES 轮：$STUCK 台滞留（idle，合批窗口后到达的单飞弹回）——P74 舞步·NMS 本机并发（保 1s 合批窗）"
     STUCK_IDS=$(python3 -c "import json;print(' '.join(json.load(open('evidence/s5/latejoin-stuck.json'))))")
-    scp $SSHOPT -P 22 /tmp/burst-onboard.sh "root@$(nms_ip)":"/tmp/burst-onboard.sh" > /dev/null 2>&1 || true
-    ssh $SSHOPT -p 22 "root@$(nms_ip)" "rm -f /tmp/burst-codes.txt; chmod +x /tmp/burst-onboard.sh && /tmp/burst-onboard.sh $STUCK_IDS" \
+    scp $SSHOPT -P "$SSHD_PORT" /tmp/burst-onboard.sh "root@$(nms_ip)":"/tmp/burst-onboard.sh" > /dev/null 2>&1 || true
+    ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" "rm -f /tmp/burst-codes.txt; chmod +x /tmp/burst-onboard.sh && /tmp/burst-onboard.sh $STUCK_IDS" \
       > "$EVIDENCE/s5/latejoin-pass$LATEJOIN_PASSES-codes.txt" 2>&1 || true
     LJ_OK=$(grep -c "^2" "$EVIDENCE/s5/latejoin-pass$LATEJOIN_PASSES-codes.txt" || true)
     log "  late-join 第 $LATEJOIN_PASSES 轮发射 $STUCK 台，2xx 响应 $LJ_OK 条（同窗合批）"

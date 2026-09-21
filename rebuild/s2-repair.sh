@@ -10,9 +10,9 @@ exec > >(tee "$EVIDENCE/s2/repair-log.txt") 2>&1
 
 IP=$(cat "$NMS_IP_FILE")
 log "保留首次自举日志副本（证据）"
-ssh $SSHOPT -p 22 "root@$IP" 'cp -n /var/log/bootstrap.log /var/log/bootstrap.log.attempt1 2>/dev/null || true'
+ssh $SSHOPT -p "$SSHD_PORT" "root@$IP" 'cp -n /var/log/bootstrap.log /var/log/bootstrap.log.attempt1 2>/dev/null || true'
 log "重放 ASCII 版自举脚本（nms-user-data6-ascii.sh）"
-ssh $SSHOPT -p 22 "root@$IP" 'bash -s' < "$REBUILD_DIR/nms-user-data6-ascii.sh" || true
+ssh $SSHOPT -p "$SSHD_PORT" "root@$IP" 'bash -s' < "$REBUILD_DIR/nms-user-data6-ascii.sh" || true
 log "检查远端自举标记与 PG"
-ssh $SSHOPT -p 22 "root@$IP" 'tail -3 /var/log/bootstrap.log; docker exec nms-timescaledb pg_isready -U nms'
+ssh $SSHOPT -p "$SSHD_PORT" "root@$IP" 'tail -3 /var/log/bootstrap.log; docker exec nms-timescaledb pg_isready -U nms'
 log "修复完成，请重跑 s2-nms.sh 续跑"

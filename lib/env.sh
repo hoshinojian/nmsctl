@@ -24,6 +24,16 @@ esac
 [ -f "$SOAK_ENV/env.local" ] || { echo "ABORT: $SOAK_ENV/env.local 不存在——从 scripts/soak/env.local.example 复制并填写" >&2; exit 1; }
 # shellcheck source=/dev/null
 source "$SOAK_ENV/env.local"
+# 档位几何覆盖（ISS-010：env.local 之后 source——外部「先 source 档位文件再 export」会被
+# env.local 同名键冲掉（后 source 者胜）。GEOMETRY_FILE 指向档位文件（如 geometry-5vps.env：
+# NODE_COUNT/FIRST_HOP_COUNT/FIRST_HOP_REGION/SOAK_BATCHES/G5_MAX_DEPTH），在此统一后置覆盖；
+# 文件内注释=普通 shell 注释，凭据禁止入档位文件）。
+if [ -n "${GEOMETRY_FILE:-}" ]; then
+  [ -f "$GEOMETRY_FILE" ] || { echo "ABORT: GEOMETRY_FILE=$GEOMETRY_FILE 不存在" >&2; exit 1; }
+  # shellcheck source=/dev/null
+  source "$GEOMETRY_FILE"
+  echo "[env] GEOMETRY_FILE=$GEOMETRY_FILE 已覆盖（NODE_COUNT=${NODE_COUNT:-?} FH=${FIRST_HOP_COUNT:-?}）"
+fi
 
 # 运行时目录承担旧 $HOME/nms-rebuild-20260910 的角色：各阶段 cd 进去后，
 # 嵌入 python 里的相对路径 evidence/... 与 $EVIDENCE 同一目录，语义不变。

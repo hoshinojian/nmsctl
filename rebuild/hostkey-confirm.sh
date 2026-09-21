@@ -17,9 +17,10 @@ FP=$(printf '%s\n' "$PUB" | ssh-keygen -lf - | awk '{print $2}')
 case "$FP" in SHA256:*) :;; *) echo "ABORT: 指纹格式异常: $FP" >&2; exit 1;; esac
 
 log "确认 $NID 指纹 $FP（经跳板实测，可信渠道）"
+# URL 的 $NMS_API_ADDR 在编排机侧展开（远端无此变量——首版误写 \$ 致空 host，PUT 打空）
 code=$(nms_ssh "curl -sS -m 30 -o /tmp/hkc.json -w '%{http_code}' -X PUT -H 'Content-Type: application/json' \
-  --data '{\"fingerprint\":\"$FP\"}' http://\$NMS_API_ADDR:80/api/v1/nodes/$NID/host-key/confirm")
-nms_ssh 'cat /tmp/hkc.json 2>/dev/null; rm -f /tmp/hkc.json'; echo
+  --data '{\"fingerprint\":\"$FP\"}' http://$NMS_API_ADDR:80/api/v1/nodes/$NID/host-key/confirm")
+echo "confirm HTTP $code: $(nms_ssh 'cat /tmp/hkc.json 2>/dev/null; rm -f /tmp/hkc.json')"
 case "$code" in
   200) log "$NID host key 确认成功（覆写+解除拒绝）";;
   409) log "$NID 无活跃 mismatch（409）——幂等跳过";;

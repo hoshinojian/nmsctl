@@ -5,11 +5,11 @@
 职责分工：网络 IO 全在 live-snapshot.sh（bash，通道自适应）；本工具只读快照与
 env.local 做逐项对账，任何 ✗ 即 exit 1：
 
-  1 出口   快照实测出口 vs EGRES_EXPECT（漂移=✗——net-probe --apply 或开 DRILL_EGRES_AUTO）
+  1 出口   仅记录（v3.3/v3.4 零防火墙：漂移容忍——WG roaming/auto 通道，不再对账白名单）
   2 配置   s2 PUT 集（基础四键+DEPLOY_CONCURRENCY+BENCH_EXTRA_CONFIG）vs 快照 GET /config 实效
   3 台数   NODE_COUNT vs /nodes 台数；FIRST_HOP_COUNT vs domain=0 台数（NMS 未建按跳过/--require-live 计 ✗）
   4 树参   CHILD_BUDGET(env) vs config child_budget；G5_MAX_DEPTH(env) ≤ config max_depth
-  5 防火墙 fw tcp 源 ⊇ {实测出口}
+  5 80 翻转双断言（v3.4 票 3）：公网 :80 必须不通 ∧ 隧道 NMS_API_ADDR:80 必须 ok
 
 用法:
   python3 drill/env-verify.py [--root <SOAK_ENV>] [--refresh] [--require-live]
@@ -72,11 +72,11 @@ def main():
         if not ok:
             bad.append(name)
 
-    # 1 出口
+    # 1 出口（v3.3/v3.4 零防火墙口径：仅记录——Clash TUN/系统代理漂移在册容忍，WG roaming 接管）
     eg = (snap / "egress.txt").read_text().strip() if (snap / "egress.txt").exists() else ""
     want_eg = env.get("EGRES_EXPECT", "")
-    row("egress", bool(eg) and eg == want_eg,
-        f"实测={eg or '不可达'} 期望={want_eg}" + ("" if eg == want_eg else "（漂移——net-probe --apply / DRILL_EGRES_AUTO=1）"))
+    drift = f"（历史白名单 {want_eg}）漂移已容忍" if eg and want_eg and eg != want_eg else ""
+    row("egress", True, f"实测={eg or '不可达'}——仅记录{drift}")
 
     # 2/3 活系统（快照空文件=NMS 未建）
     cfg = nodes = None
@@ -113,15 +113,18 @@ def main():
             f"CHILD_BUDGET(env)={env.get('CHILD_BUDGET')} vs config={got.get('child_budget')}；"
             f"G5 门限={g5 or '-'} ≤ config max_depth={got.get('max_depth')}")
 
-    # 5 防火墙（期望集=实测出口 ∪ DRILL_FW_EXTRA_SOURCES——附加稳定源缺任一即 ✗：
-    #     attempt6 实录该键曾因未导出漏出 s2 塑形，防回归）
-    fw = json.loads((snap / "fw-tcp-sources.json").read_text()) if (snap / "fw-tcp-sources.json").exists() else []
-    extra = [x.strip() + "/32" for x in env.get("DRILL_FW_EXTRA_SOURCES", "").split(",") if x.strip()]
-    want_srcs = ({f"{eg}/32"} if eg else set()) | set(extra)
-    fw_ok = bool(eg) and want_srcs and want_srcs <= set(fw)
-    row("firewall", fw_ok,
-        f"tcp 源={fw} 期望集={sorted(want_srcs) if want_srcs else '?'}——"
-        + ("全在列" if fw_ok else "缺失"))
+    # 5 80 翻转双断言（v3.4 票 3：公网必须不通 ∧ 隧道必须 ok——比读配置强的实证；
+    #   NMS 未建时同 2/3 按 --require-live 语义跳过）
+    pub = (snap / "api80-public.txt").read_text().strip() if (snap / "api80-public.txt").exists() else ""
+    tun = (snap / "api80-tunnel.txt").read_text().strip() if (snap / "api80-tunnel.txt").exists() else ""
+    if cfg is None:
+        row("api80-flip", not a.require_live, "NMS 未建，跳过（--require-live 时计 ✗）")
+    else:
+        api = env.get("NMS_API_ADDR", "10.100.0.1")
+        row("api80-flip", pub == "unreachable" and tun == "ok",
+            f"公网:80={pub or '?'}（应 unreachable） 隧道 {api}:80={tun or '?'}（应 ok）"
+            + ("" if pub == "unreachable" else "——公网意外可达，查 HTTP_ADDR 绑定")
+            + ("" if tun == "ok" else "——隧道不通，查 wg0/服务（WG 断=基建抖动分诊）"))
 
     print(f"== env-verify（root={root} require-live={a.require_live}）==")
     for name, mark, detail in rows:

@@ -8,17 +8,21 @@ mkdir -p "$EVIDENCE/s6"
 exec > >(tee "$EVIDENCE/s6/log.txt") 2>&1
 
 check_egress
-log "选取验证目标：2 第一跳 + 3 深路径（S6'：抽测扩到 5 台；深路径优先深度 3）"
+log "选取验证目标：min(5,NODE_COUNT) 台=第一跳优先+深路径补余（S6'；ISS-015 档位语境参数化，深路径优先深度 3）"
 api GET /topology > "$EVIDENCE/s6/topology.json"
 TARGETS=$(python3 - <<'EOF'
 import json, os
 nc, fh_n = int(os.environ['NODE_COUNT']), int(os.environ['FIRST_HOP_COUNT'])
 t = json.load(open('evidence/s6/topology.json'))
-fh = sorted(n['id'] for n in t['nodes'] if n['domain'] == 0)[:2]
-d3 = sorted(n['id'] for n in t['tree']['nodes'] if n['depth'] == 3)
-deep_pool = d3 or sorted(n['id'] for n in t['tree']['nodes'] if n['depth'] >= 3)  # 深度3不足时退而取≥3
-targets = fh + deep_pool[:3]
-assert len(fh) == 2 and len(targets) == 5, f"抽测目标不足 5 台: {targets}"
+want_fh = min(2, fh_n)                      # 第一跳样本上限（小档位按 FH 收缩）
+want_deep = min(3, max(nc - want_fh, 0))    # 深路径补余（总量 ≤ min(5, nc)）
+fh = sorted(n['id'] for n in t['nodes'] if n['domain'] == 0)[:want_fh]
+deep_pool = sorted(n['id'] for n in t['tree']['nodes'] if n['depth'] == 3) \
+    or sorted(n['id'] for n in t['tree']['nodes'] if n['depth'] >= 3)      # 深度3不足时退而取≥3
+deep = [i for i in deep_pool if i not in fh][:want_deep]
+targets = fh + deep
+cap = min(5, nc)
+assert len(targets) == min(cap, len(t['nodes'])), f"抽测目标不足 {cap} 台: {targets}"
 assert len(t['nodes']) == nc, f"nodes {len(t['nodes'])} != {nc}"
 print('\n'.join(targets))
 EOF

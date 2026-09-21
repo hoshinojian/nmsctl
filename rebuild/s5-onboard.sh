@@ -86,6 +86,10 @@ log "收敛轮询（5s 间隔，上限 ${S5_DEADLINE:-1800}s；挂树数经 GET 
 # 30min 不够时经环境/env.local 注入更大值，不改脚本；缺省 1800s（64 台全新跑估 8-15min，留富余）。
 DEADLINE=$(( $(date +%s) + ${S5_DEADLINE:-1800} ))
 START=$(date +%s); LATEJOIN_PASSES=0; LAST_LATEJOIN=0
+# late-join 补试上限（ISS-004/attempt5 实录参数化）：缺省 2（09-13 口径）；深窄几何
+#（FH=2/出度 2）每发补试只能部署"已挂接子集"，形态为 2/4/8/16/32…翻倍——79 台需 ~5-6 发，
+# 演练 env.local 注入 LATEJOIN_MAX=4 并同步 G4' 构成式（下）。
+LATEJOIN_MAX="${LATEJOIN_MAX:-2}"
 # late-join 补试：合批窗口关闭后到达的 PUT 会撞 #122 单飞被弹回（idle ∧ onboard=true 滞留），
 # P74 口径本为人工重翻——零人工目标下由本回路自动化：有界 2 轮、逐轮留痕、仅在无在飞轮时执行
 converged=""
@@ -129,7 +133,7 @@ try:
 except Exception:
     print(1)
 " 2>/dev/null || echo 1)
-  if [ "$STUCK" -gt 0 ] && [ "$LATEJOIN_PASSES" -lt 2 ] && [ "$RUNNING" = "0" ] && [ $((NOW - START)) -ge 120 ] && [ $((NOW - LAST_LATEJOIN)) -ge 120 ]; then
+  if [ "$STUCK" -gt 0 ] && [ "$LATEJOIN_PASSES" -lt "$LATEJOIN_MAX" ] && [ "$RUNNING" = "0" ] && [ $((NOW - START)) -ge 120 ] && [ $((NOW - LAST_LATEJOIN)) -ge 120 ]; then
     LATEJOIN_PASSES=$((LATEJOIN_PASSES + 1)); LAST_LATEJOIN=$NOW
     # ISS-004 工具刀（2026-09-21）：补试改 NMS 本机并发 PUT（与初爆发键同款 burst 脚本）——
     # 原编排机经 SSH 隧道逐台 api PUT ~2.5s/台，全部落在 #184 的 1s 合批窗外，77 台各成
@@ -154,7 +158,7 @@ if [ -z "$converged" ]; then
 fi
 
 log "G4' 断言（form=$FORM）：fresh=构成式上限（主轮1+F3重排1+late-join≤2+A重试≤2）∧ 无悬挂轮 ∧ 末轮 succeeded；resume=轮数只记录不断言（三值终态 ∧ 末轮 succeeded）；重排触发单列记录"
-export LATEJOIN_PASSES   # G4' python 子进程读取
+export LATEJOIN_PASSES LATEJOIN_MAX   # G4' python 子进程读取（构成式联动）
 api GET /agent-deploy > "$EVIDENCE/s5/agent-deploy-final.json"
 api GET /nodes > "$EVIDENCE/s5/nodes-final.json"
 api GET "/alerts?status=active&limit=200" > "$EVIDENCE/s5/alerts-final.json"
@@ -170,14 +174,16 @@ assert dep, "agent-deploy 无任何部署轮（异常：收敛门已过但零轮
 # fresh 轮数上限构成式（自愈收口计划 C 项：替换裸 len<=4，各系数来源显式可追溯）：
 #   主轮 1         —— #184 合批：同窗开键 PUT 合并为单轮部署；
 #   + F3 重排 1    —— #200 轮内传输类失败集自动重排：一次、不回 idle、不成环（allowRequeue=false）；
-#   + late-join ≤2 —— 本脚本补试回路硬上限（LATEJOIN_PASSES<2，仅无在飞轮时执行）；
+#   + late-join ≤LATEJOIN_MAX —— 本脚本补试回路上限（缺省 2=09-13 口径；深窄几何每发只
+#                     部署已挂接子集、翻倍推进，attempt5 实录 79 台需 >2 发——env 注入 4，
+#                     系数与回路同源联动，ISS-004）；
 #   + A 重试 ≤2    —— #127 provision 自动重纳管（PR #244 已合入）：failBack 后对账循环
-#                     自动重发 ≤2 次（30min 窗），每次重试各产生一轮。C3 依赖边已兑现：
-#                     系数随 A 合入追加；满配额验收轮实测后如需再校准另行小 PR。
-FRESH_MAX_WAVES = 1 + 1 + 2 + 2   # = 6
+#                     自动重发 ≤2 次（30min 窗），每次重试各产生一轮。
+_LJ_MAX = int(os.environ.get('LATEJOIN_MAX', '2'))
+FRESH_MAX_WAVES = 1 + 1 + _LJ_MAX + 2   # 缺省 6；LATEJOIN_MAX=4 时 8
 if form == 'fresh':
     assert 1 <= len(dep) <= FRESH_MAX_WAVES, \
-        f"部署轮数 {len(dep)} 超出 fresh 构成式上限（主轮1+F3重排1+late-join≤2+A重试≤2={FRESH_MAX_WAVES}）: {rounds}"
+        f"部署轮数 {len(dep)} 超出 fresh 构成式上限（主轮1+F3重排1+late-join≤{_LJ_MAX}+A重试≤2={FRESH_MAX_WAVES}）: {rounds}"
     # fresh 无历史轮：任何非终态即悬挂，只许 succeeded/partial（failed 历史轮仅 resume 形态合法）
     assert all(i.get('status') in ('succeeded', 'partial') for i in dep), f"存在非终态（悬挂）轮: {rounds}"
 else:

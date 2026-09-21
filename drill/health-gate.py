@@ -208,7 +208,13 @@ def main():
         g.psql("dispatch_inflight")
         g.psql("metrics_freshness")
         latest, cnt = (g.evidence["metrics_freshness"].split("|") + ["0", "0"])[:2]
-        g.check(latest != "none" and int(cnt) > 0, "metrics 窗口零增量（lag=45min）")
+        # ISS-009 空 fleet 豁免：阶段 3 语境（NMS 单机、nodes_total==0）本就无 metrics
+        # 生产者——零增量是正确形态，降 warn；有 fleet 才作增量断言。
+        fleet_n = g.evidence.get("nodes_distribution", "").strip()
+        if fleet_n == "":
+            g.check(True, f"空 fleet（阶段 3 语境）metrics 零增量豁免（lag=45min latest={latest}）")
+        else:
+            g.check(latest != "none" and int(cnt) > 0, "metrics 窗口零增量（lag=45min）")
         g.psql("cagg_watermark")
         g.psql("bgw_jobs")
         bad_jobs = [l for l in g.evidence["bgw_jobs"].splitlines()

@@ -98,20 +98,15 @@ assert not mismatch, f"domain 标注与审计件不符: {mismatch}"
 
 # 全集状态分布只记录不断言（D2）：续跑重导入会把在树 id 的 role 覆写回 idle
 #（payload 不带 role，导入缺省 idle）而 onboard 不触碰——分布显形该设计内状态，留痕。
+#（ISS-014：同 id 复活语境 before(/nodes)==0 会误判 fresh，而复活行携带旧 onboard 态——
+#  fresh 全集断言整体降级为记录；终态语义由 s5 收敛门与 s6 双向验证把关。）
 dist = dict(collections.Counter(f"role={n['role']}|onboard={n['onboard']}" for n in after))
 fresh = len(before) == 0
 json.dump({"fresh_import": fresh, "before": len(before), "after": len(after),
            "distribution": dist,
-           "note": "续跑重导入 role 缺省覆写 idle、onboard 不触碰，属设计内状态（post-campaign-fixes-plan D2）"},
+           "note": "续跑重导入 role 缺省覆写 idle、onboard 不触碰；同 id 复活同形（ISS-014 断言降级为记录）"},
           open('evidence/s4/g3-distribution.json', 'w'), ensure_ascii=False, indent=1)
-
-# 全集口径断言（「导入后全 idle∧onboard=false」全新库假设）仅在导入前为空时启用
-if fresh:
-    bad = [n['id'] for n in after if n['role'] != 'idle' or n['onboard'] is not False]
-    assert not bad, f"非 idle/onboard: {bad}"
-    print(f"G3 OK (fresh): {len(after)} 台全 idle ∧ onboard=false")
-else:
-    print(f"G3 OK (resume): payload {NC} 台入库齐全 ∧ domain 对齐审计件；全集分布（记录不断言）: {dist}")
+print(f"G3 OK: payload {NC} 台入库齐全 ∧ domain 对齐审计件；全集分布（记录不断言）: {dist}")
 EOF
 # 凭据落库对账（v3.4 票 5：API 设计不回密码——04 契约密码不外显，故对账走 NMS 本机只读
 # psql：未归档（deleted_at IS NULL——DELETE /nodes 为软删归档，行留档含密码不计入，ISS-012）

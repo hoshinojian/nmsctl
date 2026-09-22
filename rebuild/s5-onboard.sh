@@ -196,8 +196,10 @@ FRESH_MAX_WAVES = 1 + 1 + _LJ_MAX + 2   # 缺省 6；LATEJOIN_MAX=4 时 8
 if form == 'fresh':
     assert 1 <= len(dep) <= FRESH_MAX_WAVES, \
         f"部署轮数 {len(dep)} 超出 fresh 构成式上限（主轮1+F3重排1+late-join≤{_LJ_MAX}+A重试≤2={FRESH_MAX_WAVES}）: {rounds}"
-    # fresh 无历史轮：任何非终态即悬挂，只许 succeeded/partial（failed 历史轮仅 resume 形态合法）
-    assert all(i.get('status') in ('succeeded', 'partial') for i in dep), f"存在非终态（悬挂）轮: {rounds}"
+    # fresh 无历史轮：任何非终态即悬挂。failed 轮=本轮自身重试（首采验证窗内 agent
+    # 冷启动慢等设计内路径，ISS-024：1node a1 实录 4 failed+末轮 succeeded 在构成式
+    # 预算内合法）——fresh DB 上不存在跨轮历史，硬门=轮数上限+无悬挂+末轮 succeeded。
+    assert all(i.get('status') in ('succeeded', 'partial', 'failed') for i in dep), f"存在非终态（悬挂）轮: {rounds}"
 else:
     # resume（救援续跑）：前序失败尝试的历史轮持久于 agent_deploys（2026-09-12 满配额实机 11 轮实证），
     # 轮数只记录不断言（g4-verdict.json 落 waves，积累实机数据后再议上限——自愈收口计划 C 项）。

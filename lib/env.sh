@@ -143,12 +143,14 @@ fi
 # 通道断连有界重试（ISS-026/027/第 10 跑实录：通道族瞬断 scp/ssh 255 打在裸调用上 set -e
 # 直崩——api() 已修，此为全调用方覆盖版）：255 类 3×10s，非 255 不重试。
 _cmd_retry(){ # _cmd_retry <命令...>：255 类 3×10s 有界重试（通道族瞬断，全调用方覆盖）
+  # 重试日志走 stderr——stdout 属于调用方命令（$(nms_ssh ...) 捕获语境混入日志行
+  # 会污染变量，第 11 跑实录「凭据落库 10 != 10」即此）
   local try rc
   for try in 1 2 3; do
     "$@"; rc=$?
     [ $rc -eq 0 ] && return 0
     [ $rc -eq 255 ] || return $rc
-    [ "$try" = "3" ] || { log "通道断连（rc=255，Clash/出口漂移窗）——10s 后重试 $try/3"; sleep 10; }
+    [ "$try" = "3" ] || { log "通道断连（rc=255，Clash/出口漂移窗）——10s 后重试 $try/3" >&2; sleep 10; }
   done
   return $rc
 }

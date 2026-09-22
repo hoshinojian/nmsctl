@@ -96,9 +96,15 @@ converged=""
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   api GET /nodes > "$EVIDENCE/s5/nodes-live.json" 2>/dev/null || { sleep 15; continue; }
   api GET /agent-deploy > "$EVIDENCE/s5/deploys-live.json" 2>/dev/null || true
-  STATUS=$(python3 - <<'EOF'
-import json
-items = json.load(open('evidence/s5/nodes-live.json'))['items']
+  # 通道族带内容错重试（第 14 跑实录：连接通+rc=0 但响应体截断→json.load 崩整跑——api 重试只护
+  # 命令 rc 不护截断体）。三轮内拿不到合法 JSON 视为该轮采样失败，跳过本轮继续轮询（轮询本身
+  # 就是重试，单轮丢失无害；DEADLINE 仍兜底）。
+  STATUS=$(python3 - <<'EOF' 2>/dev/null || { sleep 15; continue; }
+import json, sys
+try:
+    items = json.load(open('evidence/s5/nodes-live.json'))['items']
+except Exception as e:
+    sys.exit(1)  # 截断/坏体：本轮放弃（外层跳过重采）
 ok = sum(1 for n in items if n['role'] == 'managed' and n['status'] == 'online' and n['collection_state'] == 'collection_ok')
 roles = {}
 for n in items:

@@ -143,17 +143,28 @@ fi
 nms_ssh() { ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" "$@"; }
 nms_scp() { scp $SSHOPT -P "$SSHD_PORT" "$@"; }
 
-# NMS API 调用：统一走 ssh 打 NMS 本机 loopback（2026-09-11：本地→NMS:80 直连
+# NMS API 调用：统一走 ssh 打 NMS 本机（2026-09-11：本地→NMS:80 直连
 # 间歇被本地出口吞包，ssh 通道全程零故障——绕开之）。body 经 stdin 传递避免引号地狱。
+# 通道断连有界重试（pass1 实录 2026-09-22：Clash TUN 出口漂移窗内 ssh 255 断连打在
+# api() 上 set -e 直崩整遍确认——通道中断=基建抖动分诊口径的工具面兑现）：255 类
+# 断连 3×10s 重试，真失败 3 次后照常非零退出。
 api() {
   local method=$1 path=$2 body=${3:-}
   local ip; ip=$(nms_ip)
-  if [ -n "$body" ]; then
-    printf '%s' "$body" | ssh $SSHOPT -p "$SSHD_PORT" "root@$ip" \
-      "curl -sS -m 60 -X $method -H 'Content-Type: application/json' --data-binary @- http://$NMS_API_ADDR:80/api/v1$path"
-  else
-    ssh $SSHOPT -p "$SSHD_PORT" "root@$ip" "curl -sS -m 60 http://$NMS_API_ADDR:80/api/v1$path"
-  fi
+  local try rc
+  for try in 1 2 3; do
+    if [ -n "$body" ]; then
+      printf '%s' "$body" | ssh $SSHOPT -p "$SSHD_PORT" "root@$ip" \
+        "curl -sS -m 60 -X $method -H 'Content-Type: application/json' --data-binary @- http://$NMS_API_ADDR:80/api/v1$path"
+    else
+      ssh $SSHOPT -p "$SSHD_PORT" "root@$ip" "curl -sS -m 60 http://$NMS_API_ADDR:80/api/v1$path"
+    fi
+    rc=$?
+    [ $rc -eq 0 ] && return 0
+    [ $rc -eq 255 ] || return $rc   # 非 255（如远端命令失败）不重试
+    [ "$try" = "3" ] || { log "api 通道断连（rc=255，Clash/出口漂移窗）——10s 后重试 $try/3"; sleep 10; }
+  done
+  return $rc
 }
 
 # 出口观测（零防火墙口径 v3.3/v3.4 降级为记录：白名单/中止语义退役——出口漂移是常态

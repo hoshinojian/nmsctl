@@ -33,11 +33,12 @@ PYEOF
 export EXPECT_HEAD="$HEAD"
 log "EXPECT_HEAD → $HEAD"
 
-# step <名> <命令...>：rc==0 ∧ 日志含 GATE 行（非空判据，ISS-011），否则 ABORT。
+# step <名> <命令...>：rc==0 ∧ 日志含结果行（GATE 或「良性退出」——s1 的 SKIP 路径
+# 不写 GATE；ISS-011 纪律=非空结果行而非特定字样），否则 ABORT。
 step(){ local n=$1; shift
   "$@" > "$E/$n.log" 2>&1; local rc=$?
-  local g; g=$(grep -E "GATE " "$E/$n.log" | tail -1)
-  log "$n rc=$rc ${g:-<无GATE行>}"
+  local g; g=$(grep -E "GATE |良性退出" "$E/$n.log" | tail -1)
+  log "$n rc=$rc ${g:-<无结果行>}"
   if [ $rc -ne 0 ] || [ -z "$g" ]; then log "ABORT：$n 未过（rc=$rc）——按分诊协议处置后从断点续跑"; exit 1; fi
 }
 S="$SOAK_SELF_DIR"

@@ -140,8 +140,20 @@ PYEOF
   }
   nms_ssh_cfg_update
 fi
-nms_ssh() { ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" "$@"; }
-nms_scp() { scp $SSHOPT -P "$SSHD_PORT" "$@"; }
+# 通道断连有界重试（ISS-026/027/第 10 跑实录：通道族瞬断 scp/ssh 255 打在裸调用上 set -e
+# 直崩——api() 已修，此为全调用方覆盖版）：255 类 3×10s，非 255 不重试。
+_cmd_retry(){ # _cmd_retry <命令...>：255 类 3×10s 有界重试（通道族瞬断，全调用方覆盖）
+  local try rc
+  for try in 1 2 3; do
+    "$@"; rc=$?
+    [ $rc -eq 0 ] && return 0
+    [ $rc -eq 255 ] || return $rc
+    [ "$try" = "3" ] || { log "通道断连（rc=255，Clash/出口漂移窗）——10s 后重试 $try/3"; sleep 10; }
+  done
+  return $rc
+}
+nms_ssh(){ _cmd_retry ssh $SSHOPT -p "$SSHD_PORT" "root@$(nms_ip)" "$@"; }
+nms_scp(){ _cmd_retry scp $SSHOPT -P "$SSHD_PORT" "$@"; }
 
 # NMS API 调用：统一走 ssh 打 NMS 本机（2026-09-11：本地→NMS:80 直连
 # 间歇被本地出口吞包，ssh 通道全程零故障——绕开之）。body 经 stdin 传递避免引号地狱。

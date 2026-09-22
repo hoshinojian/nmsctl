@@ -51,17 +51,16 @@ else
 fi
 
 log "拆除后盘点（s1.5 语境承接 s1 的 post-inventory 落盘责任——s2 前置强等该文件）"
-if [ "$DRY_RUN" = "1" ]; then
-  cp "$EVIDENCE/s1.5/pre-inventory.json" "$EVIDENCE/s1.5/post-inventory.json"
-else
-  "$VPSCTL" list -tag env:soak -no-check-ssh -output "$EVIDENCE/s1.5/post-inventory.json" > /dev/null
-fi
-mkdir -p "$EVIDENCE/s1"
-if [ "$DRY_RUN" != "1" ]; then
-  cp "$EVIDENCE/s1.5/post-inventory.json" "$EVIDENCE/s1/post-inventory.json"
-fi
-
-python3 - "$EVIDENCE/s1.5/post-inventory.json" <<'EOF'
+# ISS-026：DO 删除有传播延迟（pass1 实录：delete 返回后 4s 断言，1 台仍在列、稍后自清）
+# ——断言前给 6×15s 重采窗，窗内每轮重采 inventory；仍残留才 FAIL。
+post_ok=""
+for _pc in 1 2 3 4 5 6; do
+  if [ "$DRY_RUN" = "1" ]; then
+    cp "$EVIDENCE/s1.5/pre-inventory.json" "$EVIDENCE/s1.5/post-inventory.json"
+  else
+    "$VPSCTL" list -tag env:soak -no-check-ssh -output "$EVIDENCE/s1.5/post-inventory.json" > /dev/null
+  fi
+  if python3 - "$EVIDENCE/s1.5/post-inventory.json" <<'EOF'
 import json, os, sys
 d = json.load(open(sys.argv[1]))
 items = d if isinstance(d, list) else d.get('items', d.get('droplets', []))
@@ -73,6 +72,15 @@ if nms:
     assert len(nms) == 1 and nms[0].get('status') == 'active', f"NMS 状态异常: {nms}"
 print(f"POST nms={len(nms)}(active) nodes=0")
 EOF
+  then post_ok=1; break; fi
+  log "拆除传播未净（第 $_pc/6 轮）——15s 后重采"
+  sleep 15
+done
+[ -n "$post_ok" ] || gate S1.5 FAIL "拆除后盘点 6 轮仍残留（见 post-inventory.json）"
+mkdir -p "$EVIDENCE/s1"
+if [ "$DRY_RUN" != "1" ]; then
+  cp "$EVIDENCE/s1.5/post-inventory.json" "$EVIDENCE/s1/post-inventory.json"
+fi
 
 # ---- DB 台账清理（叶子优先=循环逐删；provisioning/带子 409 随子删/终态自然解除）----
 if [ "$NMS_N" -eq 0 ]; then

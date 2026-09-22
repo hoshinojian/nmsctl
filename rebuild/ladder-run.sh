@@ -71,19 +71,39 @@ solo_attempt(){ local stage=$1 sa=$2 at=$3
   step "s$stage-a$at-post1" bash "$S/s1-teardown.sh"
 }
 
+# LADDER_FROM 阶段块级续跑缝（ISS-025 设计修正版）：入口只能是阶段起点（s1/s4/s5）
+# ——每个入口自洽或复用容错（s4 起点保留 a1：s2 复用路径接住在网慢出生机，区别于
+# 曾撤掉的跳 a1 错误设计）。缺省 s1=整遍。
+FROM="${LADDER_FROM:-s1}"
+blk(){ # blk <块名>：FROM 之前的块返回 1（跳过），FROM 起的块返回 0（执行）
+  local passed=0
+  for b in s1 s2 s3 s4 s5 final; do
+    [ "$b" = "$FROM" ] && passed=1
+    [ "$b" = "$1" ] && { [ $passed -eq 0 ] && return 1; return 0; }
+  done
+  return 0
+}
+
+if blk s1; then
 log "==== 阶段 1 申请 NMS ×2 ===="
 solo_attempt 1 create 1
 solo_attempt 1 create 2
+fi
+if blk s2; then
 log "==== 阶段 2 SSH/WG ×2 ===="
 solo_attempt 2 ssh 1
 solo_attempt 2 ssh 2
+fi
+if blk s3; then
 log "==== 阶段 3 bin+配参 ×2 ===="
 solo_attempt 3 full 1
 solo_attempt 3 full 2
+fi
 
+if blk s4; then
 log "==== 阶段 4 五台档 ×2（a2 复用 NMS 地基）===="
 export GEOMETRY_FILE="$R/geometry-5vps.env"
-step s4-a1-s2  bash "$S/s2-nms.sh"                       # full（STOP_AFTER 缺省）
+step s4-a1-s2  bash "$S/s2-nms.sh"                       # full（STOP_AFTER 缺省；nms.json 在则复用）
 step s4-a1-s3  bash "$S/s3-nodes.sh"
 step s4-a1-s4  bash "$S/s4-import.sh"
 step s4-a1-s15 bash "$S/s1.5-fleet-only.sh"
@@ -92,7 +112,9 @@ step s4-a2-s3  bash "$S/s3-nodes.sh"
 step s4-a2-s4  bash "$S/s4-import.sh"
 step s4-a2-s15 bash "$S/s1.5-fleet-only.sh"
 verd stage4-5vps-a2 4 5vps 2 resume "地基保留语境复用 NMS" "ladder/pass$PASS/s4-a2-s4.log"
+fi
 
+if blk s5; then
 log "==== 阶段 5 建树（全冷启动 ×2 每档）===="
 for rung in 1node 10node; do
   export GEOMETRY_FILE="$R/geometry-$rung.env"
@@ -108,8 +130,9 @@ for rung in 1node 10node; do
   done
 done
 unset GEOMETRY_FILE
+fi
 
 log "==== pass 末清零 ===="
 step final-s0 bash "$S/s0-baseline.sh"
 step final-s1 bash "$S/s1-teardown.sh"
-log "PASS $PASS COMPLETE（阶梯五阶段全绿+云上清零）"
+log "PASS $PASS COMPLETE（阶梯五阶段全绿+云上清零；FROM=$FROM）"

@@ -269,7 +269,9 @@ EOF
 git -C "$NMS2_REPO" describe --tags --always > "$EVIDENCE/expected-agent-version.txt"
 log "期望 agent 版本：$(cat "$EVIDENCE/expected-agent-version.txt")"
 # 票 7：阶梯出口接健康闸（wave 级）——防「阶梯绿但正式轮轮末闸必红」断层；结果入 verdict（票 0-9 语义）
-python3 "$SOAK_HOME/drill/health-gate.py" --level wave --expect-converged \
+# ISS-027：不带 --expect-converged——s2 的门只管 NMS 本体；fleet 收敛归 s5/s6。复用 NMS 的
+# DB 可能留陈旧 idle 行（上轮 s1.5 死在 DO 侧断言、清账未跑），expect-converged 会误红。
+python3 "$SOAK_HOME/drill/health-gate.py" --level wave \
   --evidence-root "$SOAK_ENV" --commit "$(git -C "$NMS2_REPO" rev-parse --short HEAD)" \
   --notes "s2 STOP_AFTER=full 阶段 3 出口" || gate S2 FAIL "健康闸（wave）红——阶梯出口不绿"
 stage_verdict 3 null "health ok+迁移版本最新+四键 GET 实效对账+健康闸 wave 绿（零防火墙）"

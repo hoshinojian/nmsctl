@@ -44,9 +44,9 @@ step(){ local n=$1; shift
 S="$SOAK_SELF_DIR"
 # verd <scenario> <phase> <rung> <attempt> <form> <notes> <evidence>：阶段 4/5 留痕。
 verd(){ local sc=$1 ph=$2 rg=$3 at=$4 fm=$5 notes=$6 ev=$7
-  python3 - "$E/vb-$sc.json" "$sc" "$notes" <<'PYEOF'
+  python3 - "$E/vb-$sc.json" "$sc" "$ph" "$notes" <<'PYEOF'
 import json, sys
-sc, notes = sys.argv[2], sys.argv[3]
+sc, ph, notes = sys.argv[2], sys.argv[3], sys.argv[4]
 f = {"inject": f"ladder-pass {sc}", "proof_before": f"evidence/ladder/ 下 {sc} 各步 log",
      "proof_effective": notes, "exercise": f"阶段 {ph} 判据", "observe": "各步 log",
      "recover": "attempt 收尾拆净", "proof_after": "GATE PASS", "cleanup": "同 recover"}
@@ -83,11 +83,13 @@ solo_attempt 3 full 2
 
 log "==== 阶段 4 五台档 ×2（a2 复用 NMS 地基）===="
 export GEOMETRY_FILE="$R/geometry-5vps.env"
+if [ "${LADDER_FROM:-start}" != "s4a2" ]; then
 step s4-a1-s2  bash "$S/s2-nms.sh"                       # full（STOP_AFTER 缺省）
 step s4-a1-s3  bash "$S/s3-nodes.sh"
 step s4-a1-s4  bash "$S/s4-import.sh"
 step s4-a1-s15 bash "$S/s1.5-fleet-only.sh"
 verd stage4-5vps-a1 4 5vps 1 fresh "5 台入池+凭据对账+拆净保 NMS" "ladder/pass$PASS/s4-a1-s4.log"
+fi
 step s4-a2-s3  bash "$S/s3-nodes.sh"
 step s4-a2-s4  bash "$S/s4-import.sh"
 step s4-a2-s15 bash "$S/s1.5-fleet-only.sh"

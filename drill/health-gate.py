@@ -43,6 +43,23 @@ import verdict as verdict_mod  # noqa: E402  复用八字段哈希（与 verdict
 
 WRAPPER = str(HERE / "nms-ssh.sh")  # ssh 包装（IP 读取+校验在包装内；DRILL_EVIDENCE_ROOT）
 API_BASE = os.environ.get("NMS_API_ADDR", "10.100.0.1") + ":80"  # v3.4：API 腿=WG 隧道地址（80 单绑）
+
+
+def fetch_json(url: str) -> str:
+    """通道族空包重试（第 12 跑实录：连接通而响应空→json.loads 崩；_cmd_retry 只管
+    断连不管空包）。3×10s，空/非 JSON 后重试，3 次仍坏才让异常上抛。"""
+    import time as _t
+    for attempt in range(1, 4):
+        cp = subprocess.run(["bash", WRAPPER, "curl", "-sS", "-m", "30", url],
+                            capture_output=True, text=True)
+        s = cp.stdout.strip()
+        if s.startswith("{"):
+            return s
+        if attempt < 3:
+            print(f"[health-gate] 通道空包/坏包（attempt {attempt}/3，stdout={cp.stdout[:60]!r}）——10s 重试",
+                  file=sys.stderr)
+            _t.sleep(10)
+    return cp.stdout  # 3 次仍坏：原样返回，让上层 json.loads 抛真实错误
 QUERIES = {  # 全只读；role/orphaned 在 nodes、status/collection_state 在 node_latest_state（Round1 轮末闸实录：nodes 表无此二列）；:lag/:lockwait/:since 经头部 \set 绑定（:'var' 字面量转义）
     "nodes_distribution": ("SELECT n.role,nls.status,nls.collection_state,count(*) FROM nodes n "
                            "JOIN node_latest_state nls ON nls.node_id=n.id "
@@ -172,10 +189,7 @@ def main():
     if fx and fx.exists():
         alerts = json.loads(fx.read_text())
     else:
-        cp = subprocess.run(["bash", WRAPPER, "curl", "-sS", "-m", "30",
-                             f"http://{API_BASE}/api/v1/alerts?status=active&limit=200"],
-                            capture_output=True, text=True)
-        alerts = json.loads(cp.stdout)
+        alerts = json.loads(fetch_json(f"{API_BASE}/api/v1/alerts?status=active&limit=200"))
     n_active = int(alerts.get("total", len(alerts.get("items", []))))
     g.record("alerts_active_total", n_active)
     if a.expect_zero_alerts:
@@ -188,9 +202,7 @@ def main():
         if fx and fx.exists():
             items = json.loads(fx.read_text()).get("items", [])
         else:
-            cp = subprocess.run(["bash", WRAPPER, "curl", "-sS", "-m", "30",
-                                 f"http://{API_BASE}/api/v1/nodes"], capture_output=True, text=True)
-            items = json.loads(cp.stdout).get("items", [])
+            items = json.loads(fetch_json(f"{API_BASE}/api/v1/nodes")).get("items", [])
         dist = {}
         for n in items:
             k = f"{n.get('role')}|{n.get('status')}|{n.get('collection_state')}"

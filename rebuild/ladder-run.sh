@@ -83,13 +83,11 @@ solo_attempt 3 full 2
 
 log "==== 阶段 4 五台档 ×2（a2 复用 NMS 地基）===="
 export GEOMETRY_FILE="$R/geometry-5vps.env"
-if [ "${LADDER_FROM:-start}" != "s4a2" ]; then
 step s4-a1-s2  bash "$S/s2-nms.sh"                       # full（STOP_AFTER 缺省）
 step s4-a1-s3  bash "$S/s3-nodes.sh"
 step s4-a1-s4  bash "$S/s4-import.sh"
 step s4-a1-s15 bash "$S/s1.5-fleet-only.sh"
 verd stage4-5vps-a1 4 5vps 1 fresh "5 台入池+凭据对账+拆净保 NMS" "ladder/pass$PASS/s4-a1-s4.log"
-fi
 step s4-a2-s3  bash "$S/s3-nodes.sh"
 step s4-a2-s4  bash "$S/s4-import.sh"
 step s4-a2-s15 bash "$S/s1.5-fleet-only.sh"
